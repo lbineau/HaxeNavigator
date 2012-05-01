@@ -28,7 +28,31 @@ class ApplicationMain {
 		
 		
 		if (call_real)
-			SimpleNavigatorExample.main();
+			begin ();
+	}
+	
+	private static function begin () {
+		
+		var hasMain = false;
+		
+		for (methodName in Type.getClassFields(SimpleNavigatorExample))
+		{
+			if (methodName == "main")
+			{
+				hasMain = true;
+				break;
+			}
+		}
+		
+		if (hasMain)
+		{
+			Reflect.callMethod (SimpleNavigatorExample, Reflect.field (SimpleNavigatorExample, "main"), []);
+		}
+		else
+		{
+			nme.Lib.current.addChild(cast (Type.createInstance(SimpleNavigatorExample, []), nme.display.DisplayObject));	
+		}
+		
 	}
 
 	static function onEnter (_) {
@@ -63,7 +87,7 @@ class ApplicationMain {
 		nme.Lib.current.removeChild(mPreloader);
 		mPreloader = null;
 		
-		SimpleNavigatorExample.main ();
+		begin ();
 		
 	}
 	
