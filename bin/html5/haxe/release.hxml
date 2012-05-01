@@ -1,0 +1,11 @@
+-main ApplicationMain 
+-D nme_install_tool
+-cp src
+-lib nme
+-lib actuate
+-cp C:\Program Files\FlashDevelop\Library\HAXE\classes\
+-D web
+-js bin/html5/bin/HaxeNavigator.js
+-cp bin/html5/haxe
+--remap flash:jeash
+-lib jeash

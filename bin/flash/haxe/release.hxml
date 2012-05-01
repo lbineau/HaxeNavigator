@@ -1,0 +1,12 @@
+-main ApplicationMain 
+-D nme_install_tool
+-cp src
+-lib nme
+-lib actuate
+-D fdb
+-cp C:\Program Files\FlashDevelop\Library\HAXE\classes\
+-D web
+-swf-version 11
+-swf9 bin/flash/bin/HaxeNavigator.swf
+-swf-header 800:480:60:FFFFFF
+-cp bin/flash/haxe

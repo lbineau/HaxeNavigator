@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<project>
+	<!-- metadata, make sure 'package' is at least 2 segments (ie. com.myproject) -->
+	<app file="HaxeNavigator" title="HaxeNavigator" main="SimpleNavigatorExample" package="com.lbineau.example" 
+		version="1.0.0" company="lbineau" />
+		
+	<!-- output -->
+	<window width="800" height="480" fps="60" background="0xFFFFFF" orientation="landscape" resizable="true" />
+	<set name="BUILD_DIR" value="bin" />
+	<set name="SWF_VERSION" value="11" />
+	
+	<!-- classpath, haxe libs -->
+	<classpath name="src" />
+	<haxelib name="nme" />
+	<haxelib name="actuate" />
+	<!-- assets -->
+	
+	<!-- DLLs -->
+	<ndll name="std" />
+	<ndll name="regexp" />
+	<ndll name="zlib" />
+	<ndll name="nme" haxelib="nme" />
+	<haxedef name="fdb" if="target_flash" />
+	
+	<classpath name="C:\Program Files\FlashDevelop\Library\HAXE\classes\" />
+	<!-- Windows app: hide console -->
+	<!--<setenv name="no_console" value="1" />-->
+</project>
