@@ -7,5 +7,4 @@
 -D web
 -js bin/html5/bin/HaxeNavigator.js
 -cp bin/html5/haxe
---remap flash:jeash
--lib jeash
+--remap flash:nme

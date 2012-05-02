@@ -13,14 +13,18 @@ import flash.display.Sprite;
 import nme.display.Graphics;
 import nme.events.MouseEvent;
 import nme.events.TextEvent;
+import nme.events.TimerEvent;
 import nme.Lib;
 import nme.display.StageAlign;
 import nme.display.StageScaleMode;
+import haxe.Timer;
+
 #if flash
 import examples.simple.components.ExampleTextBox;
 import com.lbineau.navigator.features.display.DebugConsole;
 #end
 #if js
+import js.Lib;
 #end
 
 /**
@@ -31,8 +35,12 @@ import com.lbineau.navigator.features.display.DebugConsole;
 class SimpleNavigatorExample extends BaseExample
 {
 	private var navigator : Navigator;
-	private var i : Int;
-
+	#if js
+	private var timer : Timer;
+	private var history:Array<String>;
+	private var window: Dynamic;
+	#end
+	
 	static public function main() 
 	{
 		new SimpleNavigatorExample();
@@ -45,22 +53,6 @@ class SimpleNavigatorExample extends BaseExample
 		stage.addChild(this);
 				
 		navigator = new Navigator();
-
-		#if flash
-			// Navigator debug console, very nice for development. Toggle with the tilde key, "~". You can type in new states by hand!
-			var display : DebugConsole = new DebugConsole(navigator);
-			addChild(display);
-			
-			// Example description and menu
-			var intro = new ExampleTextBox();
-			intro.addEventListener(TextEvent.LINK, handleTextLinkEvent);
-			addRow([intro]);
-		#end
-		
-		#if js
-			trace("Click for change the Shape width HaxeNavigator", "information");
-			stage.addEventListener(MouseEvent.CLICK, _shownNext);
-		#end
 
 		// These components implement Navigator interfaces to become state responders. Look at comments in the shape classes.
 		var redSquare:Square = new Square(0x990000);
@@ -82,21 +74,42 @@ class SimpleNavigatorExample extends BaseExample
 		navigator.add(blackCircle, "*/black");
 		
 		// And then we decide the point at which the Navigator takes over
-		navigator.start("black");
+		navigator.start();
+		
+
+		#if flash
+			// Navigator debug console, very nice for development. Toggle with the tilde key, "~". You can type in new states by hand!
+			var display : DebugConsole = new DebugConsole(navigator);
+			addChild(display);
+			
+			// Example description and menu
+			var intro = new ExampleTextBox();
+			intro.addEventListener(TextEvent.LINK, handleTextLinkEvent);
+			addRow([intro]);
+		#end
+		
+		#if js
+			window = js.Lib.window;
+			history = [""];
+			_onTick();
+			timer = new Timer(100);
+			timer.run = _onTick;
+		#end
 	}
 	
 	#if js
 	// fallback for JS demo
-	private function _shownNext(e:MouseEvent):Void 
+	private function _onTick():Void 
 	{
-		switch(i % 4) {
-			case 0:navigator.request("red");
-			case 1:navigator.request("green");
-			case 2:navigator.request("blue");
-			case 3:navigator.request("black");
+		if(history[history.length-1] != window.location.href) {
+			history.push(window.location.href);
+			var param:Array<String> = window.location.href.split('#!/');
+			if(param.length > 1) {
+				navigator.request(param[1]);
+			}
 		}
-		i++;
 	}
+	
 	#end
 	
 	private function handleTextLinkEvent(e:TextEvent):Void 

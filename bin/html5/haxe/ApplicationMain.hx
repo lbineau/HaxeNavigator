@@ -105,7 +105,14 @@ class ApplicationMain {
 		Lib.current.removeChild(preloader);
 		preloader = null;
 		
-		SimpleNavigatorExample.main ();
+		if (Reflect.field(SimpleNavigatorExample, "main") == null)
+		{
+			nme.Lib.current.addChild(new SimpleNavigatorExample());
+		}
+		else
+		{
+			Reflect.callMethod (SimpleNavigatorExample, Reflect.field (SimpleNavigatorExample, "main"), []);
+		}
 		
 	}
    

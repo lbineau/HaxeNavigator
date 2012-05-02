@@ -52,7 +52,7 @@ ApplicationMain.preloader_onComplete = function(event) {
 	ApplicationMain.preloader.removeEventListener(jeash.events.Event.COMPLETE,ApplicationMain.preloader_onComplete);
 	jeash.Lib.jeashGetCurrent().removeChild(ApplicationMain.preloader);
 	ApplicationMain.preloader = null;
-	SimpleNavigatorExample.main();
+	if(Reflect.field(SimpleNavigatorExample,"main") == null) jeash.Lib.jeashGetCurrent().addChild(new SimpleNavigatorExample()); else Reflect.field(SimpleNavigatorExample,"main").apply(SimpleNavigatorExample,[]);
 }
 ApplicationMain.prototype = {
 	__class__: ApplicationMain
@@ -556,18 +556,17 @@ jeash.events.EventDispatcher.prototype = {
 		var priority = inPriority == null?0:inPriority;
 		var list = this.getList(type);
 		if(!this.existList(type)) {
-			list = new Array();
+			list = [];
 			this.setList(type,list);
 		}
-		var l = new jeash.events.Listener(inListener,capture,priority);
-		list.push(l);
+		list.push(new jeash.events.Listener(inListener,capture,priority));
+		list.sort(jeash.events.EventDispatcher.compareListeners);
 	}
 	,dispatchEvent: function(event) {
 		if(event.target == null) event.target = this.jeashTarget;
-		var list = this.getList(event.type);
 		var capture = event.eventPhase == jeash.events.EventPhase.CAPTURING_PHASE;
 		if(this.existList(event.type)) {
-			list.sort(jeash.events.EventDispatcher.compareListeners);
+			var list = this.getList(event.type);
 			var idx = 0;
 			while(idx < list.length) {
 				var listener = list[idx];
@@ -626,9 +625,11 @@ jeash.display.DisplayObject = $hxClasses["jeash.display.DisplayObject"] = functi
 	this.mMask = null;
 	this.mMaskingObj = null;
 	this.mBoundsRect = new jeash.geom.Rectangle();
+	this.mBoundsDirty = true;
 	this.mGraphicsBounds = null;
 	this.mMaskHandle = null;
 	this.name = "DisplayObject " + jeash.display.DisplayObject.mNameID++;
+	this.jeashFilters = [];
 	this.jeashSetVisible(true);
 };
 jeash.display.DisplayObject.__name__ = ["jeash","display","DisplayObject"];
@@ -688,9 +689,11 @@ jeash.display.DisplayObject.prototype = $extend(jeash.events.EventDispatcher.pro
 			evt.target = inObj;
 			this.dispatchEvent(evt);
 		}
-		var evt = new jeash.events.Event(jeash.events.Event.ADDED_TO_STAGE,false,false);
-		evt.target = inObj;
-		this.dispatchEvent(evt);
+		if(this.jeashIsOnStage()) {
+			var evt = new jeash.events.Event(jeash.events.Event.ADDED_TO_STAGE,false,false);
+			evt.target = inObj;
+			this.dispatchEvent(evt);
+		}
 	}
 	,jeashDoRemoved: function(inObj) {
 		if(inObj == this) {
@@ -846,18 +849,18 @@ jeash.display.DisplayObject.prototype = $extend(jeash.events.EventDispatcher.pro
 	,jeashRender: function(parentMatrix,inMask) {
 		var gfx = this.jeashGetGraphics();
 		if(gfx != null) {
-			if(gfx.jeashIsTile || !this.jeashVisible) return;
+			if(!this.jeashVisible) return;
 			if(this.mMtxDirty || this.mMtxChainDirty) this.jeashValidateMatrix();
 			var m = this.mFullMatrix.clone();
 			if(this.jeashFilters != null && (gfx.jeashChanged || inMask != null)) {
-				gfx.jeashRender(inMask,m);
+				if(gfx.jeashRender(inMask,m)) this.jeashInvalidateBounds();
 				var _g = 0, _g1 = this.jeashFilters;
 				while(_g < _g1.length) {
 					var filter = _g1[_g];
 					++_g;
 					filter.jeashApplyFilter(gfx.jeashSurface);
 				}
-			} else gfx.jeashRender(inMask,m);
+			} else if(gfx.jeashRender(inMask,m)) this.jeashInvalidateBounds();
 			m.tx = m.tx + gfx.jeashExtent.x * m.a + gfx.jeashExtent.y * m.c;
 			m.ty = m.ty + gfx.jeashExtent.x * m.b + gfx.jeashExtent.y * m.d;
 			if(inMask != null) jeash.Lib.jeashDrawToSurface(gfx.jeashSurface,inMask,m,(this.parent != null?this.parent.alpha:1) * this.alpha); else {
@@ -874,14 +877,15 @@ jeash.display.DisplayObject.prototype = $extend(jeash.events.EventDispatcher.pro
 		if(!this.jeashGetVisible()) return null;
 		var gfx = this.jeashGetGraphics();
 		if(gfx != null) {
+			var extX = gfx.jeashExtent.x;
+			var extY = gfx.jeashExtent.y;
 			var local = this.globalToLocal(point);
+			if(local.x - extX < 0 || local.y - extY < 0 || (local.x - extX) * this.jeashGetScaleX() > this.jeashGetWidth() || (local.y - extY) * this.jeashGetScaleY() > this.jeashGetHeight()) return null;
 			switch( (this.GetStage().jeashPointInPathMode)[1] ) {
 			case 0:
-				if(local.x < 0 || local.y < 0 || local.x * this.jeashGetScaleX() > this.jeashGetWidth() || local.y * this.jeashGetScaleY() > this.jeashGetHeight()) return null;
 				if(gfx.jeashHitTest(local.x,local.y)) return this;
 				break;
 			case 1:
-				if(local.x < 0 || local.y < 0 || local.x * this.jeashGetScaleX() > this.jeashGetWidth() || local.y * this.jeashGetScaleY() > this.jeashGetHeight()) return null;
 				if(gfx.jeashHitTest(local.x * this.jeashGetScaleX(),local.y * this.jeashGetScaleY())) return this;
 				break;
 			}
@@ -924,7 +928,6 @@ jeash.display.DisplayObject.prototype = $extend(jeash.events.EventDispatcher.pro
 		var gfx = this.jeashGetGraphics();
 		if(gfx == null) this.mBoundsRect = new jeash.geom.Rectangle(this.jeashGetX(),this.jeashGetY(),0,0); else {
 			this.mBoundsRect = gfx.jeashExtent.clone();
-			gfx.mBoundsDirty = false;
 			if(this.mScale9Grid != null) {
 				this.mBoundsRect.width *= this.jeashGetScaleX();
 				this.mBoundsRect.height *= this.jeashGetScaleY();
@@ -935,11 +938,6 @@ jeash.display.DisplayObject.prototype = $extend(jeash.events.EventDispatcher.pro
 	,GetScreenBounds: function() {
 		if(this.mBoundsDirty) this.BuildBounds();
 		return this.mBoundsRect.clone();
-	}
-	,GetFocusObjects: function(outObjs) {
-	}
-	,__BlendIndex: function() {
-		return this.blendMode == null?jeash.display.Graphics.BLEND_NORMAL:this.blendMode[1];
 	}
 	,jeashGetInteractiveObjectStack: function(outStack) {
 		var io = this.jeashAsInteractiveObject();
@@ -958,13 +956,13 @@ jeash.display.DisplayObject.prototype = $extend(jeash.events.EventDispatcher.pro
 				var obj = stack[_g];
 				++_g;
 				event.currentTarget = obj;
-				obj.dispatchEvent(event);
+				obj.jeashDispatchEvent(event);
 				if(event.jeashGetIsCancelled()) return;
 			}
 		}
 		event.jeashSetPhase(jeash.events.EventPhase.AT_TARGET);
 		event.currentTarget = this;
-		this.dispatchEvent(event);
+		this.jeashDispatchEvent(event);
 		if(event.jeashGetIsCancelled()) return;
 		if(event.bubbles) {
 			event.jeashSetPhase(jeash.events.EventPhase.BUBBLING_PHASE);
@@ -974,17 +972,31 @@ jeash.display.DisplayObject.prototype = $extend(jeash.events.EventDispatcher.pro
 				var obj = stack[_g];
 				++_g;
 				event.currentTarget = obj;
-				obj.dispatchEvent(event);
+				obj.jeashDispatchEvent(event);
 				if(event.jeashGetIsCancelled()) return;
 			}
 		}
 	}
 	,jeashBroadcast: function(event) {
-		this.dispatchEvent(event);
+		this.jeashDispatchEvent(event);
+	}
+	,jeashDispatchEvent: function(event) {
+		if(event.target == null) event.target = this;
+		event.currentTarget = this;
+		return jeash.events.EventDispatcher.prototype.dispatchEvent.call(this,event);
+	}
+	,dispatchEvent: function(event) {
+		var result = this.jeashDispatchEvent(event);
+		if(event.jeashGetIsCancelled()) return true;
+		if(event.bubbles && this.parent != null) this.parent.dispatchEvent(event);
+		return result;
 	}
 	,jeashAddToStage: function() {
 		var gfx = this.jeashGetGraphics();
-		if(gfx != null) jeash.Lib.jeashAppendSurface(gfx.jeashSurface);
+		if(gfx != null) {
+			jeash.Lib.jeashSetSurfaceId(gfx.jeashSurface,this.name);
+			jeash.Lib.jeashAppendSurface(gfx.jeashSurface);
+		}
 	}
 	,jeashInsertBefore: function(obj) {
 		var gfx1 = this.jeashGetGraphics();
@@ -1112,8 +1124,6 @@ jeash.display.InteractiveObject.prototype = $extend(jeash.display.DisplayObject.
 	,toString: function() {
 		return this.name;
 	}
-	,OnKey: function(inKey) {
-	}
 	,jeashAsInteractiveObject: function() {
 		return this;
 	}
@@ -1134,6 +1144,7 @@ jeash.display.DisplayObjectContainer = $hxClasses["jeash.display.DisplayObjectCo
 	this.jeashChildren = new Array();
 	this.mLastSetupObjs = new Array();
 	this.mouseChildren = true;
+	this.numChildren = 0;
 	this.tabChildren = true;
 	jeash.display.InteractiveObject.call(this);
 	this.name = "DisplayObjectContainer " + jeash.display.DisplayObject.mNameID++;
@@ -1150,15 +1161,11 @@ jeash.display.DisplayObjectContainer.prototype = $extend(jeash.display.Interacti
 		return this;
 	}
 	,jeashBroadcast: function(event) {
-		var i = 0;
-		if(this.jeashChildren.length > 0) while(true) {
-			var child = this.jeashChildren[i];
+		var _g = 0, _g1 = this.jeashChildren;
+		while(_g < _g1.length) {
+			var child = _g1[_g];
+			++_g;
 			child.jeashBroadcast(event);
-			if(i >= this.jeashChildren.length) break;
-			if(this.jeashChildren[i] == child) {
-				i++;
-				if(i >= this.jeashChildren.length) break;
-			}
 		}
 		this.dispatchEvent(event);
 	}
@@ -1224,14 +1231,6 @@ jeash.display.DisplayObjectContainer.prototype = $extend(jeash.display.Interacti
 		}
 		return r;
 	}
-	,GetFocusObjects: function(outObjs) {
-		var _g = 0, _g1 = this.jeashChildren;
-		while(_g < _g1.length) {
-			var obj = _g1[_g];
-			++_g;
-			obj.GetFocusObjects(outObjs);
-		}
-	}
 	,jeashGetNumChildren: function() {
 		return this.jeashChildren.length;
 	}
@@ -1250,11 +1249,6 @@ jeash.display.DisplayObjectContainer.prototype = $extend(jeash.display.Interacti
 		if(object.parent == this) {
 			this.setChildIndex(object,this.jeashChildren.length - 1);
 			return object;
-		}
-		var _g1 = 0, _g = this.jeashChildren.length;
-		while(_g1 < _g) {
-			var i = _g1++;
-			if(this.jeashChildren[i] == object) throw "Internal error: child already existed at index " + i;
 		}
 		if(this.jeashIsOnStage()) object.jeashAddToStage();
 		this.jeashChildren.push(object);
@@ -1330,7 +1324,6 @@ jeash.display.DisplayObjectContainer.prototype = $extend(jeash.display.Interacti
 			var i = _g1++;
 			if(this.jeashChildren[i] == child) {
 				child.jeashSetParent(null);
-				if(this.getChildIndex(child) >= 0) throw "Not removed properly";
 				return;
 			}
 		}
@@ -1415,7 +1408,7 @@ jeash.display.DisplayObjectContainer.prototype = $extend(jeash.display.Interacti
 		while(_g1 < _g) {
 			var i = _g1++;
 			var result = this.jeashChildren[l - i].jeashGetObjectUnderPoint(point);
-			if(result != null) return result;
+			if(result != null) return this.mouseChildren?result:this;
 		}
 		return jeash.display.InteractiveObject.prototype.jeashGetObjectUnderPoint.call(this,point);
 	}
@@ -1456,13 +1449,11 @@ jeash.display.DisplayObjectContainer.prototype = $extend(jeash.display.Interacti
 	,__properties__: $extend(jeash.display.InteractiveObject.prototype.__properties__,{get_numChildren:"jeashGetNumChildren"})
 });
 jeash.display.Sprite = $hxClasses["jeash.display.Sprite"] = function() {
-	jeash.Lib.jeashGetCanvas();
 	this.jeashGraphics = new jeash.display.Graphics();
-	if(this.jeashGraphics != null) this.jeashGraphics.owner = this;
 	jeash.display.DisplayObjectContainer.call(this);
 	this.buttonMode = false;
 	this.name = "Sprite " + jeash.display.DisplayObject.mNameID++;
-	this.jeashGraphics.jeashSurface.id = this.name;
+	jeash.Lib.jeashSetSurfaceId(this.jeashGraphics.jeashSurface,this.name);
 };
 jeash.display.Sprite.__name__ = ["jeash","display","Sprite"];
 jeash.display.Sprite.__super__ = jeash.display.DisplayObjectContainer;
@@ -1499,12 +1490,12 @@ jeash.display.Sprite.prototype = $extend(jeash.display.DisplayObjectContainer.pr
 		if(cursor == this.useHandCursor) return cursor;
 		if(this.jeashCursorCallbackOver != null) this.removeEventListener(jeash.events.MouseEvent.ROLL_OVER,this.jeashCursorCallbackOver);
 		if(this.jeashCursorCallbackOut != null) this.removeEventListener(jeash.events.MouseEvent.ROLL_OUT,this.jeashCursorCallbackOut);
-		if(!cursor) jeash.Lib.jeashSetCursor(false); else {
+		if(!cursor) jeash.Lib.jeashSetCursor(jeash._Lib.CursorType.Default); else {
 			this.jeashCursorCallbackOver = function(_) {
-				jeash.Lib.jeashSetCursor(true);
+				jeash.Lib.jeashSetCursor(jeash._Lib.CursorType.Pointer);
 			};
 			this.jeashCursorCallbackOut = function(_) {
-				jeash.Lib.jeashSetCursor(false);
+				jeash.Lib.jeashSetCursor(jeash._Lib.CursorType.Default);
 			};
 			this.addEventListener(jeash.events.MouseEvent.ROLL_OVER,this.jeashCursorCallbackOver);
 			this.addEventListener(jeash.events.MouseEvent.ROLL_OUT,this.jeashCursorCallbackOut);
@@ -1514,6 +1505,40 @@ jeash.display.Sprite.prototype = $extend(jeash.display.DisplayObjectContainer.pr
 	}
 	,jeashGetDropTarget: function() {
 		return this.jeashDropTarget;
+	}
+	,jeashSetX: function(n) {
+		this.jeashInvalidateMatrix(true);
+		this.jeashX = n;
+		if(this.parent != null) this.parent.jeashInvalidateBounds();
+		return n;
+	}
+	,jeashSetY: function(n) {
+		this.jeashInvalidateMatrix(true);
+		this.jeashY = n;
+		if(this.parent != null) this.parent.jeashInvalidateBounds();
+		return n;
+	}
+	,jeashSetScaleX: function(inS) {
+		if(this.jeashScaleX == inS) return inS;
+		if(this.parent != null) this.parent.jeashInvalidateBounds();
+		if(this.mBoundsDirty) this.BuildBounds();
+		if(!this.mMtxDirty) this.jeashInvalidateMatrix(true);
+		this.jeashScaleX = inS;
+		return inS;
+	}
+	,jeashSetScaleY: function(inS) {
+		if(this.jeashScaleY == inS) return inS;
+		if(this.parent != null) this.parent.jeashInvalidateBounds();
+		if(this.mBoundsDirty) this.BuildBounds();
+		if(!this.mMtxDirty) this.jeashInvalidateMatrix(true);
+		this.jeashScaleY = inS;
+		return inS;
+	}
+	,jeashSetRotation: function(n) {
+		if(!this.mMtxDirty) this.jeashInvalidateMatrix(true);
+		if(this.parent != null) this.parent.jeashInvalidateBounds();
+		this.jeashRotation = n;
+		return n;
 	}
 	,__class__: jeash.display.Sprite
 	,__properties__: $extend(jeash.display.DisplayObjectContainer.prototype.__properties__,{get_dropTarget:"jeashGetDropTarget",set_useHandCursor:"jeashSetUseHandCursor",get_graphics:"jeashGetGraphics"})
@@ -1735,8 +1760,6 @@ var SimpleNavigatorExample = $hxClasses["SimpleNavigatorExample"] = function() {
 	stage.align = jeash.display.StageAlign.TOP_LEFT;
 	stage.addChild(this);
 	this.navigator = new com.lbineau.navigator.Navigator();
-	haxe.Log.trace("Click for change the Shape width HaxeNavigator",{ fileName : "SimpleNavigatorExample.hx", lineNumber : 61, className : "SimpleNavigatorExample", methodName : "new", customParams : ["information"]});
-	stage.addEventListener(jeash.events.MouseEvent.CLICK,this._shownNext.$bind(this));
 	var redSquare = new examples.simple.components.Square(10027008);
 	var greenSquare = new examples.simple.components.Square(39168);
 	var blueSquare = new examples.simple.components.Circle(153);
@@ -1750,7 +1773,12 @@ var SimpleNavigatorExample = $hxClasses["SimpleNavigatorExample"] = function() {
 	this.navigator.add(greenSquare,"*/green");
 	this.navigator.add(blueSquare,"*/blue");
 	this.navigator.add(blackCircle,"*/black");
-	this.navigator.start("black");
+	this.navigator.start();
+	this.window = js.Lib.window;
+	this.history = [""];
+	this._onTick();
+	this.timer = new haxe.Timer(100);
+	this.timer.run = this._onTick.$bind(this);
 };
 SimpleNavigatorExample.__name__ = ["SimpleNavigatorExample"];
 SimpleNavigatorExample.main = function() {
@@ -1759,23 +1787,15 @@ SimpleNavigatorExample.main = function() {
 SimpleNavigatorExample.__super__ = examples.simple.utils.BaseExample;
 SimpleNavigatorExample.prototype = $extend(examples.simple.utils.BaseExample.prototype,{
 	navigator: null
-	,i: null
-	,_shownNext: function(e) {
-		switch(this.i % 4) {
-		case 0:
-			this.navigator.request("red");
-			break;
-		case 1:
-			this.navigator.request("green");
-			break;
-		case 2:
-			this.navigator.request("blue");
-			break;
-		case 3:
-			this.navigator.request("black");
-			break;
+	,timer: null
+	,history: null
+	,window: null
+	,_onTick: function() {
+		if(this.history[this.history.length - 1] != this.window.location.href) {
+			this.history.push(this.window.location.href);
+			var param = this.window.location.href.split("#!/");
+			if(param.length > 1) this.navigator.request(param[1]);
 		}
-		this.i++;
 	}
 	,handleTextLinkEvent: function(e) {
 		this.navigator.request(e.text);
@@ -4218,6 +4238,11 @@ jeash.events.Event.prototype = {
 	,toString: function() {
 		return "Event";
 	}
+	,jeashCreateSimilar: function(type,related,targ) {
+		var result = new jeash.events.Event(type,this.bubbles,this.cancelable);
+		if(targ != null) result.target = targ;
+		return result;
+	}
 	,__class__: jeash.events.Event
 }
 com.lbineau.navigator.NavigatorEvent = $hxClasses["com.lbineau.navigator.NavigatorEvent"] = function(type,statusByResponder) {
@@ -4725,108 +4750,6 @@ examples.simple.components.Square.prototype = $extend(examples.simple.components
 	,__class__: examples.simple.components.Square
 });
 var haxe = haxe || {}
-haxe.Http = $hxClasses["haxe.Http"] = function(url) {
-	this.url = url;
-	this.headers = new Hash();
-	this.params = new Hash();
-	this.async = true;
-};
-haxe.Http.__name__ = ["haxe","Http"];
-haxe.Http.requestUrl = function(url) {
-	var h = new haxe.Http(url);
-	h.async = false;
-	var r = null;
-	h.onData = function(d) {
-		r = d;
-	};
-	h.onError = function(e) {
-		throw e;
-	};
-	h.request(false);
-	return r;
-}
-haxe.Http.prototype = {
-	url: null
-	,async: null
-	,postData: null
-	,headers: null
-	,params: null
-	,setHeader: function(header,value) {
-		this.headers.set(header,value);
-	}
-	,setParameter: function(param,value) {
-		this.params.set(param,value);
-	}
-	,setPostData: function(data) {
-		this.postData = data;
-	}
-	,request: function(post) {
-		var me = this;
-		var r = new js.XMLHttpRequest();
-		var onreadystatechange = function() {
-			if(r.readyState != 4) return;
-			var s = (function($this) {
-				var $r;
-				try {
-					$r = r.status;
-				} catch( e ) {
-					$r = null;
-				}
-				return $r;
-			}(this));
-			if(s == undefined) s = null;
-			if(s != null) me.onStatus(s);
-			if(s != null && s >= 200 && s < 400) me.onData(r.responseText); else switch(s) {
-			case null: case undefined:
-				me.onError("Failed to connect or resolve host");
-				break;
-			case 12029:
-				me.onError("Failed to connect to host");
-				break;
-			case 12007:
-				me.onError("Unknown host");
-				break;
-			default:
-				me.onError("Http Error #" + r.status);
-			}
-		};
-		if(this.async) r.onreadystatechange = onreadystatechange;
-		var uri = this.postData;
-		if(uri != null) post = true; else {
-			var $it0 = this.params.keys();
-			while( $it0.hasNext() ) {
-				var p = $it0.next();
-				if(uri == null) uri = ""; else uri += "&";
-				uri += StringTools.urlEncode(p) + "=" + StringTools.urlEncode(this.params.get(p));
-			}
-		}
-		try {
-			if(post) r.open("POST",this.url,this.async); else if(uri != null) {
-				var question = this.url.split("?").length <= 1;
-				r.open("GET",this.url + (question?"?":"&") + uri,this.async);
-				uri = null;
-			} else r.open("GET",this.url,this.async);
-		} catch( e ) {
-			this.onError(e.toString());
-			return;
-		}
-		if(this.headers.get("Content-Type") == null && post && this.postData == null) r.setRequestHeader("Content-Type","application/x-www-form-urlencoded");
-		var $it1 = this.headers.keys();
-		while( $it1.hasNext() ) {
-			var h = $it1.next();
-			r.setRequestHeader(h,this.headers.get(h));
-		}
-		r.send(uri);
-		if(!this.async) onreadystatechange();
-	}
-	,onData: function(data) {
-	}
-	,onError: function(msg) {
-	}
-	,onStatus: function(status) {
-	}
-	,__class__: haxe.Http
-}
 haxe.Int32 = $hxClasses["haxe.Int32"] = function() { }
 haxe.Int32.__name__ = ["haxe","Int32"];
 haxe.Int32.make = function(a,b) {
@@ -5256,6 +5179,391 @@ haxe.Stack.makeStack = function(s) {
 }
 haxe.Stack.prototype = {
 	__class__: haxe.Stack
+}
+if(!haxe._Template) haxe._Template = {}
+haxe._Template.TemplateExpr = $hxClasses["haxe._Template.TemplateExpr"] = { __ename__ : ["haxe","_Template","TemplateExpr"], __constructs__ : ["OpVar","OpExpr","OpIf","OpStr","OpBlock","OpForeach","OpMacro"] }
+haxe._Template.TemplateExpr.OpVar = function(v) { var $x = ["OpVar",0,v]; $x.__enum__ = haxe._Template.TemplateExpr; $x.toString = $estr; return $x; }
+haxe._Template.TemplateExpr.OpExpr = function(expr) { var $x = ["OpExpr",1,expr]; $x.__enum__ = haxe._Template.TemplateExpr; $x.toString = $estr; return $x; }
+haxe._Template.TemplateExpr.OpIf = function(expr,eif,eelse) { var $x = ["OpIf",2,expr,eif,eelse]; $x.__enum__ = haxe._Template.TemplateExpr; $x.toString = $estr; return $x; }
+haxe._Template.TemplateExpr.OpStr = function(str) { var $x = ["OpStr",3,str]; $x.__enum__ = haxe._Template.TemplateExpr; $x.toString = $estr; return $x; }
+haxe._Template.TemplateExpr.OpBlock = function(l) { var $x = ["OpBlock",4,l]; $x.__enum__ = haxe._Template.TemplateExpr; $x.toString = $estr; return $x; }
+haxe._Template.TemplateExpr.OpForeach = function(expr,loop) { var $x = ["OpForeach",5,expr,loop]; $x.__enum__ = haxe._Template.TemplateExpr; $x.toString = $estr; return $x; }
+haxe._Template.TemplateExpr.OpMacro = function(name,params) { var $x = ["OpMacro",6,name,params]; $x.__enum__ = haxe._Template.TemplateExpr; $x.toString = $estr; return $x; }
+haxe.Template = $hxClasses["haxe.Template"] = function(str) {
+	var tokens = this.parseTokens(str);
+	this.expr = this.parseBlock(tokens);
+	if(!tokens.isEmpty()) throw "Unexpected '" + tokens.first().s + "'";
+};
+haxe.Template.__name__ = ["haxe","Template"];
+haxe.Template.prototype = {
+	expr: null
+	,context: null
+	,macros: null
+	,stack: null
+	,buf: null
+	,execute: function(context,macros) {
+		this.macros = macros == null?{ }:macros;
+		this.context = context;
+		this.stack = new List();
+		this.buf = new StringBuf();
+		this.run(this.expr);
+		return this.buf.b.join("");
+	}
+	,resolve: function(v) {
+		if(Reflect.hasField(this.context,v)) return Reflect.field(this.context,v);
+		var $it0 = this.stack.iterator();
+		while( $it0.hasNext() ) {
+			var ctx = $it0.next();
+			if(Reflect.hasField(ctx,v)) return Reflect.field(ctx,v);
+		}
+		if(v == "__current__") return this.context;
+		return Reflect.field(haxe.Template.globals,v);
+	}
+	,parseTokens: function(data) {
+		var tokens = new List();
+		while(haxe.Template.splitter.match(data)) {
+			var p = haxe.Template.splitter.matchedPos();
+			if(p.pos > 0) tokens.add({ p : data.substr(0,p.pos), s : true, l : null});
+			if(data.charCodeAt(p.pos) == 58) {
+				tokens.add({ p : data.substr(p.pos + 2,p.len - 4), s : false, l : null});
+				data = haxe.Template.splitter.matchedRight();
+				continue;
+			}
+			var parp = p.pos + p.len;
+			var npar = 1;
+			while(npar > 0) {
+				var c = data.charCodeAt(parp);
+				if(c == 40) npar++; else if(c == 41) npar--; else if(c == null) throw "Unclosed macro parenthesis";
+				parp++;
+			}
+			var params = data.substr(p.pos + p.len,parp - (p.pos + p.len) - 1).split(",");
+			tokens.add({ p : haxe.Template.splitter.matched(2), s : false, l : params});
+			data = data.substr(parp,data.length - parp);
+		}
+		if(data.length > 0) tokens.add({ p : data, s : true, l : null});
+		return tokens;
+	}
+	,parseBlock: function(tokens) {
+		var l = new List();
+		while(true) {
+			var t = tokens.first();
+			if(t == null) break;
+			if(!t.s && (t.p == "end" || t.p == "else" || t.p.substr(0,7) == "elseif ")) break;
+			l.add(this.parse(tokens));
+		}
+		if(l.length == 1) return l.first();
+		return haxe._Template.TemplateExpr.OpBlock(l);
+	}
+	,parse: function(tokens) {
+		var t = tokens.pop();
+		var p = t.p;
+		if(t.s) return haxe._Template.TemplateExpr.OpStr(p);
+		if(t.l != null) {
+			var pe = new List();
+			var _g = 0, _g1 = t.l;
+			while(_g < _g1.length) {
+				var p1 = _g1[_g];
+				++_g;
+				pe.add(this.parseBlock(this.parseTokens(p1)));
+			}
+			return haxe._Template.TemplateExpr.OpMacro(p,pe);
+		}
+		if(p.substr(0,3) == "if ") {
+			p = p.substr(3,p.length - 3);
+			var e = this.parseExpr(p);
+			var eif = this.parseBlock(tokens);
+			var t1 = tokens.first();
+			var eelse;
+			if(t1 == null) throw "Unclosed 'if'";
+			if(t1.p == "end") {
+				tokens.pop();
+				eelse = null;
+			} else if(t1.p == "else") {
+				tokens.pop();
+				eelse = this.parseBlock(tokens);
+				t1 = tokens.pop();
+				if(t1 == null || t1.p != "end") throw "Unclosed 'else'";
+			} else {
+				t1.p = t1.p.substr(4,t1.p.length - 4);
+				eelse = this.parse(tokens);
+			}
+			return haxe._Template.TemplateExpr.OpIf(e,eif,eelse);
+		}
+		if(p.substr(0,8) == "foreach ") {
+			p = p.substr(8,p.length - 8);
+			var e = this.parseExpr(p);
+			var efor = this.parseBlock(tokens);
+			var t1 = tokens.pop();
+			if(t1 == null || t1.p != "end") throw "Unclosed 'foreach'";
+			return haxe._Template.TemplateExpr.OpForeach(e,efor);
+		}
+		if(haxe.Template.expr_splitter.match(p)) return haxe._Template.TemplateExpr.OpExpr(this.parseExpr(p));
+		return haxe._Template.TemplateExpr.OpVar(p);
+	}
+	,parseExpr: function(data) {
+		var l = new List();
+		var expr = data;
+		while(haxe.Template.expr_splitter.match(data)) {
+			var p = haxe.Template.expr_splitter.matchedPos();
+			var k = p.pos + p.len;
+			if(p.pos != 0) l.add({ p : data.substr(0,p.pos), s : true});
+			var p1 = haxe.Template.expr_splitter.matched(0);
+			l.add({ p : p1, s : p1.indexOf("\"") >= 0});
+			data = haxe.Template.expr_splitter.matchedRight();
+		}
+		if(data.length != 0) l.add({ p : data, s : true});
+		var e;
+		try {
+			e = this.makeExpr(l);
+			if(!l.isEmpty()) throw l.first().p;
+		} catch( s ) {
+			if( js.Boot.__instanceof(s,String) ) {
+				throw "Unexpected '" + s + "' in " + expr;
+			} else throw(s);
+		}
+		return function() {
+			try {
+				return e();
+			} catch( exc ) {
+				throw "Error : " + Std.string(exc) + " in " + expr;
+			}
+		};
+	}
+	,makeConst: function(v) {
+		haxe.Template.expr_trim.match(v);
+		v = haxe.Template.expr_trim.matched(1);
+		if(v.charCodeAt(0) == 34) {
+			var str = v.substr(1,v.length - 2);
+			return function() {
+				return str;
+			};
+		}
+		if(haxe.Template.expr_int.match(v)) {
+			var i = Std.parseInt(v);
+			return function() {
+				return i;
+			};
+		}
+		if(haxe.Template.expr_float.match(v)) {
+			var f = Std.parseFloat(v);
+			return function() {
+				return f;
+			};
+		}
+		var me = this;
+		return function() {
+			return me.resolve(v);
+		};
+	}
+	,makePath: function(e,l) {
+		var p = l.first();
+		if(p == null || p.p != ".") return e;
+		l.pop();
+		var field = l.pop();
+		if(field == null || !field.s) throw field.p;
+		var f = field.p;
+		haxe.Template.expr_trim.match(f);
+		f = haxe.Template.expr_trim.matched(1);
+		return this.makePath(function() {
+			return Reflect.field(e(),f);
+		},l);
+	}
+	,makeExpr: function(l) {
+		return this.makePath(this.makeExpr2(l),l);
+	}
+	,makeExpr2: function(l) {
+		var p = l.pop();
+		if(p == null) throw "<eof>";
+		if(p.s) return this.makeConst(p.p);
+		switch(p.p) {
+		case "(":
+			var e1 = this.makeExpr(l);
+			var p1 = l.pop();
+			if(p1 == null || p1.s) throw p1.p;
+			if(p1.p == ")") return e1;
+			var e2 = this.makeExpr(l);
+			var p2 = l.pop();
+			if(p2 == null || p2.p != ")") throw p2.p;
+			return (function($this) {
+				var $r;
+				switch(p1.p) {
+				case "+":
+					$r = function() {
+						return e1() + e2();
+					};
+					break;
+				case "-":
+					$r = function() {
+						return e1() - e2();
+					};
+					break;
+				case "*":
+					$r = function() {
+						return e1() * e2();
+					};
+					break;
+				case "/":
+					$r = function() {
+						return e1() / e2();
+					};
+					break;
+				case ">":
+					$r = function() {
+						return e1() > e2();
+					};
+					break;
+				case "<":
+					$r = function() {
+						return e1() < e2();
+					};
+					break;
+				case ">=":
+					$r = function() {
+						return e1() >= e2();
+					};
+					break;
+				case "<=":
+					$r = function() {
+						return e1() <= e2();
+					};
+					break;
+				case "==":
+					$r = function() {
+						return e1() == e2();
+					};
+					break;
+				case "!=":
+					$r = function() {
+						return e1() != e2();
+					};
+					break;
+				case "&&":
+					$r = function() {
+						return e1() && e2();
+					};
+					break;
+				case "||":
+					$r = function() {
+						return e1() || e2();
+					};
+					break;
+				default:
+					$r = (function($this) {
+						var $r;
+						throw "Unknown operation " + p1.p;
+						return $r;
+					}($this));
+				}
+				return $r;
+			}(this));
+		case "!":
+			var e = this.makeExpr(l);
+			return function() {
+				var v = e();
+				return v == null || v == false;
+			};
+		case "-":
+			var e = this.makeExpr(l);
+			return function() {
+				return -e();
+			};
+		}
+		throw p.p;
+	}
+	,run: function(e) {
+		var $e = (e);
+		switch( $e[1] ) {
+		case 0:
+			var v = $e[2];
+			this.buf.add(Std.string(this.resolve(v)));
+			break;
+		case 1:
+			var e1 = $e[2];
+			this.buf.add(Std.string(e1()));
+			break;
+		case 2:
+			var eelse = $e[4], eif = $e[3], e1 = $e[2];
+			var v = e1();
+			if(v == null || v == false) {
+				if(eelse != null) this.run(eelse);
+			} else this.run(eif);
+			break;
+		case 3:
+			var str = $e[2];
+			this.buf.add(str);
+			break;
+		case 4:
+			var l = $e[2];
+			var $it0 = l.iterator();
+			while( $it0.hasNext() ) {
+				var e1 = $it0.next();
+				this.run(e1);
+			}
+			break;
+		case 5:
+			var loop = $e[3], e1 = $e[2];
+			var v = e1();
+			try {
+				var x = v.iterator();
+				if(x.hasNext == null) throw null;
+				v = x;
+			} catch( e2 ) {
+				try {
+					if(v.hasNext == null) throw null;
+				} catch( e3 ) {
+					throw "Cannot iter on " + v;
+				}
+			}
+			this.stack.push(this.context);
+			var v1 = v;
+			while( v1.hasNext() ) {
+				var ctx = v1.next();
+				this.context = ctx;
+				this.run(loop);
+			}
+			this.context = this.stack.pop();
+			break;
+		case 6:
+			var params = $e[3], m = $e[2];
+			var v = Reflect.field(this.macros,m);
+			var pl = new Array();
+			var old = this.buf;
+			pl.push(this.resolve.$bind(this));
+			var $it1 = params.iterator();
+			while( $it1.hasNext() ) {
+				var p = $it1.next();
+				var $e = (p);
+				switch( $e[1] ) {
+				case 0:
+					var v1 = $e[2];
+					pl.push(this.resolve(v1));
+					break;
+				default:
+					this.buf = new StringBuf();
+					this.run(p);
+					pl.push(this.buf.b.join(""));
+				}
+			}
+			this.buf = old;
+			try {
+				this.buf.add(Std.string(v.apply(this.macros,pl)));
+			} catch( e1 ) {
+				var plstr = (function($this) {
+					var $r;
+					try {
+						$r = pl.join(",");
+					} catch( e2 ) {
+						$r = "???";
+					}
+					return $r;
+				}(this));
+				var msg = "Macro call " + m + "(" + plstr + ") failed (" + Std.string(e1) + ")";
+				throw msg;
+			}
+			break;
+		}
+	}
+	,__class__: haxe.Template
 }
 haxe.Timer = $hxClasses["haxe.Timer"] = function(time_ms) {
 	this.id = haxe.Timer.arr.length;
@@ -6308,34 +6616,22 @@ jeash.geom.Point.prototype = {
 }
 jeash.Lib = $hxClasses["jeash.Lib"] = function(title,width,height) {
 	this.mKilled = false;
-	this.mRequestedWidth = width;
-	this.mRequestedHeight = height;
-	this.mResizePending = false;
 	this.__scr = js.Lib.document.getElementById(title);
 	if(this.__scr == null) throw "Element with id '" + title + "' not found";
 	this.__scr.style.setProperty("overflow","hidden","");
 	this.__scr.style.setProperty("position","absolute","");
-	this.__scr.appendChild(jeash.Lib.jeashGetCanvas());
+	this.__scr.style.width = width + "px";
+	this.__scr.style.height = height + "px";
 };
 jeash.Lib.__name__ = ["jeash","Lib"];
-jeash.Lib.__properties__ = {get_canvas:"jeashGetCanvas",get_current:"jeashGetCurrent"}
+jeash.Lib.__properties__ = {get_current:"jeashGetCurrent"}
 jeash.Lib.mMe = null;
-jeash.Lib.context = null;
 jeash.Lib.current = null;
-jeash.Lib.glContext = null;
-jeash.Lib.canvas = null;
 jeash.Lib.mStage = null;
 jeash.Lib.mMainClassRoot = null;
 jeash.Lib.mCurrent = null;
-jeash.Lib.mRolling = null;
-jeash.Lib.mDownObj = null;
-jeash.Lib.mMouseX = null;
-jeash.Lib.mMouseY = null;
 jeash.Lib.trace = function(arg) {
-	if(window.console != null) window.console.log(arg); else if(jeash.Lib.mMe.jeashTraceTextField != null) {
-		var _g = jeash.Lib.mMe.jeashTraceTextField;
-		_g.SetText(_g.GetText() + (arg + "\n"));
-	}
+	if(window.console != null) window.console.log(arg);
 }
 jeash.Lib.getURL = function(request,target) {
 	var document = js.Lib.document;
@@ -6352,23 +6648,12 @@ jeash.Lib.getURL = function(request,target) {
 		break;
 	}
 }
-jeash.Lib.jeashGetCanvas = function() {
-	if(jeash.Lib.canvas == null) {
-		if(document == null) throw "Document not loaded yet, cannot create root canvas!";
-		jeash.Lib.canvas = document.createElement("canvas");
-		jeash.Lib.canvas.id = "Root Surface";
-		jeash.Lib.context = "2d";
-		jeash.Lib.jeashBootstrap();
-		jeash.Lib.starttime = haxe.Timer.stamp();
-	}
-	return jeash.Lib.canvas;
-}
 jeash.Lib.jeashGetCurrent = function() {
-	jeash.Lib.jeashGetCanvas();
 	if(jeash.Lib.mMainClassRoot == null) {
 		jeash.Lib.mMainClassRoot = new jeash.display.MovieClip();
 		jeash.Lib.mCurrent = jeash.Lib.mMainClassRoot;
 		jeash.Lib.mCurrent.name = "Root MovieClip";
+		jeash.Lib.jeashGetStage().addChild(jeash.Lib.mCurrent);
 	}
 	return jeash.Lib.mMainClassRoot;
 }
@@ -6380,12 +6665,10 @@ jeash.Lib.getTimer = function() {
 	return (haxe.Timer.stamp() - jeash.Lib.starttime) * 1000 | 0;
 }
 jeash.Lib.jeashGetStage = function() {
-	jeash.Lib.jeashGetCanvas();
 	if(jeash.Lib.mStage == null) {
 		var width = jeash.Lib.jeashGetWidth();
 		var height = jeash.Lib.jeashGetHeight();
 		jeash.Lib.mStage = new jeash.display.Stage(width,height);
-		jeash.Lib.mStage.addChild(jeash.Lib.jeashGetCurrent());
 	}
 	return jeash.Lib.mStage;
 }
@@ -6399,7 +6682,7 @@ jeash.Lib.jeashAppendSurface = function(surface,before) {
 		surface.style.setProperty("-o-transform-origin","0 0","");
 		surface.style.setProperty("-ms-transform-origin","0 0","");
 		try {
-			surface.onmouseover = surface.onselectstart = function() {
+			if(surface.localName == "canvas") surface.onmouseover = surface.onselectstart = function() {
 				return false;
 			};
 		} catch( e ) {
@@ -6417,10 +6700,10 @@ jeash.Lib.jeashSwapSurface = function(surface1,surface2) {
 		if(jeash.Lib.mMe.__scr.childNodes[i] == surface1) c1 = i; else if(jeash.Lib.mMe.__scr.childNodes[i] == surface2) c2 = i;
 	}
 	if(c1 != -1 && c2 != -1) {
-		swap = jeash.Lib.mMe.__scr.removeChild(jeash.Lib.mMe.__scr.childNodes[c1]);
+		swap = jeash.Lib.jeashRemoveSurface(jeash.Lib.mMe.__scr.childNodes[c1]);
 		if(c2 > c1) c2--;
 		if(c2 < jeash.Lib.mMe.__scr.childNodes.length - 1) jeash.Lib.mMe.__scr.insertBefore(swap,jeash.Lib.mMe.__scr.childNodes[c2++]); else jeash.Lib.mMe.__scr.appendChild(swap);
-		swap = jeash.Lib.mMe.__scr.removeChild(jeash.Lib.mMe.__scr.childNodes[c2]);
+		swap = jeash.Lib.jeashRemoveSurface(jeash.Lib.mMe.__scr.childNodes[c2]);
 		if(c1 > c2) c1--;
 		if(c1 < jeash.Lib.mMe.__scr.childNodes.length - 1) jeash.Lib.mMe.__scr.insertBefore(swap,jeash.Lib.mMe.__scr.childNodes[c1++]); else jeash.Lib.mMe.__scr.appendChild(swap);
 	}
@@ -6434,13 +6717,23 @@ jeash.Lib.jeashIsOnStage = function(surface) {
 	return false;
 }
 jeash.Lib.jeashRemoveSurface = function(surface) {
-	if(jeash.Lib.mMe.__scr != null) jeash.Lib.mMe.__scr.removeChild(surface);
+	if(jeash.Lib.mMe.__scr != null) {
+		var anim = surface.getAttribute("data-jeash-anim");
+		if(anim != null) {
+			var style = js.Lib.document.getElementById(anim);
+			if(style != null) jeash.Lib.mMe.__scr.removeChild(style);
+		}
+		jeash.Lib.mMe.__scr.removeChild(surface);
+	}
+	return surface;
 }
 jeash.Lib.jeashSetSurfaceTransform = function(surface,matrix) {
-	if(matrix.a == 1 && matrix.b == 0 && matrix.c == 0 && matrix.d == 1) {
+	if(matrix.a == 1 && matrix.b == 0 && matrix.c == 0 && matrix.d == 1 && surface.getAttribute("data-jeash-anim") == null) {
 		surface.style.left = matrix.tx + "px";
 		surface.style.top = matrix.ty + "px";
 	} else {
+		surface.style.left = "0px";
+		surface.style.top = "0px";
 		surface.style.setProperty("-moz-transform","matrix(" + matrix.a.toFixed(4) + ", " + matrix.b.toFixed(4) + ", " + matrix.c.toFixed(4) + ", " + matrix.d.toFixed(4) + ", " + matrix.tx.toFixed(4) + "px, " + matrix.ty.toFixed(4) + "px)","");
 		surface.style.setProperty("-webkit-transform","matrix(" + matrix.a.toFixed(4) + ", " + matrix.b.toFixed(4) + ", " + matrix.c.toFixed(4) + ", " + matrix.d.toFixed(4) + ", " + matrix.tx.toFixed(4) + ", " + matrix.ty.toFixed(4) + ")","");
 		surface.style.setProperty("-o-transform","matrix(" + matrix.a.toFixed(4) + ", " + matrix.b.toFixed(4) + ", " + matrix.c.toFixed(4) + ", " + matrix.d.toFixed(4) + ", " + matrix.tx.toFixed(4) + ", " + matrix.ty.toFixed(4) + ")","");
@@ -6493,6 +6786,14 @@ jeash.Lib.jeashSetTextDimensions = function(surface,width,height,align) {
 }
 jeash.Lib.jeashSetSurfaceAlign = function(surface,align) {
 	surface.style.setProperty("text-align",align,"");
+}
+jeash.Lib.jeashSetContentEditable = function(surface,contentEditable) {
+	if(contentEditable == null) contentEditable = true;
+	surface.setAttribute("contentEditable",contentEditable?"true":"false");
+}
+jeash.Lib.jeashDesignMode = function(mode) {
+	var document = js.Lib.document;
+	document.designMode = mode?"on":"off";
 }
 jeash.Lib.jeashSurfaceHitTest = function(surface,x,y) {
 	var _g1 = 0, _g = surface.childNodes.length;
@@ -6563,16 +6864,30 @@ jeash.Lib.jeashFullScreenHeight = function() {
 	var window = js.Lib.window;
 	return window.innerHeight;
 }
-jeash.Lib.jeashSetCursor = function(hand) {
-	if(jeash.Lib.mMe != null) {
-		if(hand) jeash.Lib.mMe.__scr.style.setProperty("cursor","pointer",""); else jeash.Lib.mMe.__scr.style.setProperty("cursor","default","");
-	}
+jeash.Lib.jeashSetCursor = function(type) {
+	if(jeash.Lib.mMe != null) jeash.Lib.mMe.__scr.style.cursor = (function($this) {
+		var $r;
+		switch( (type)[1] ) {
+		case 0:
+			$r = "pointer";
+			break;
+		case 1:
+			$r = "text";
+			break;
+		default:
+			$r = "default";
+		}
+		return $r;
+	}(this));
 }
 jeash.Lib.jeashSetSurfaceVisible = function(surface,visible) {
 	if(visible) surface.style.setProperty("display","block",""); else surface.style.setProperty("display","none","");
 }
 jeash.Lib.jeashSetSurfaceId = function(surface,name) {
-	surface.id = name;
+	if(surface.id == null || surface.id.length == 0) {
+		var regex = new EReg("[^a-zA-Z0-9]","g");
+		surface.id = regex.replace(name,"_");
+	}
 }
 jeash.Lib.jeashDrawSurfaceRect = function(surface,tgt,x,y,rect) {
 	var tgtCtx = tgt.getContext("2d");
@@ -6594,64 +6909,127 @@ jeash.Lib.jeashSetSurfaceRotation = function(surface,rotate) {
 	surface.style.setProperty("-o-transform","rotate(" + rotate + "deg)","");
 	surface.style.setProperty("-ms-transform","rotate(" + rotate + "deg)","");
 }
+jeash.Lib.jeashCreateSurfaceAnimationCSS = function(surface,data,template,templateFunc,fps,discrete,infinite) {
+	if(infinite == null) infinite = false;
+	if(discrete == null) discrete = false;
+	if(fps == null) fps = 25;
+	var document = js.Lib.document;
+	if(surface.id == null || surface.id == "") {
+		jeash.Lib.trace("Failed to create a CSS Style tag for a surface without an id attribute");
+		return;
+	}
+	var style = null;
+	if(surface.getAttribute("data-jeash-anim") != null) style = document.getElementById(surface.getAttribute("data-jeash-anim")); else {
+		style = jeash.Lib.mMe.__scr.appendChild(document.createElement("style"));
+		style.sheet.id = "__jeash_anim_" + surface.id + "__";
+		surface.setAttribute("data-jeash-anim",style.sheet.id);
+	}
+	var keyframeStylesheetRule = "";
+	var _g1 = 0, _g = data.length;
+	while(_g1 < _g) {
+		var i = _g1++;
+		var perc = i / (data.length - 1) * 100;
+		var frame = data[i];
+		keyframeStylesheetRule += perc + "% { " + template.execute(templateFunc(frame)) + " } ";
+	}
+	var animationDiscreteRule = discrete?"steps(::steps::, end)":"";
+	var animationInfiniteRule = infinite?"infinite":"";
+	var animationTpl = "";
+	var _g = 0, _g1 = ["-animation","-moz-animation","-webkit-animation","-o-animation","-ms-animation"];
+	while(_g < _g1.length) {
+		var prefix = _g1[_g];
+		++_g;
+		animationTpl += prefix + ": ::id:: ::duration::s " + animationDiscreteRule + " " + animationInfiniteRule + "; ";
+	}
+	var animationStylesheetRule = new haxe.Template(animationTpl).execute({ id : surface.id, duration : data.length / fps, steps : 1});
+	var rules = style.sheet.rules != null?style.sheet.rules:style.sheet.cssRules;
+	var _g = 0, _g1 = ["","-moz-","-webkit-","-o-","-ms-"];
+	while(_g < _g1.length) {
+		var variant = _g1[_g];
+		++_g;
+		try {
+			style.sheet.insertRule("@" + variant + "keyframes " + surface.id + " {" + keyframeStylesheetRule + "}",rules.length);
+		} catch( e ) {
+		}
+	}
+	style.sheet.insertRule("#" + surface.id + " { " + animationStylesheetRule + " } ",rules.length);
+	return style;
+}
+jeash.Lib.jeashSetSurfaceSpritesheetAnimation = function(surface,spec,fps) {
+	if(spec.length == 0) return surface;
+	var document = js.Lib.document;
+	var div = document.createElement("div");
+	div.style.backgroundImage = "url(" + surface.toDataURL("image/png",{ }) + ")";
+	div.id = surface.id;
+	var keyframeTpl = new haxe.Template("background-position: ::left::px ::top::px; width: ::width::px; height: ::height::px; ");
+	var templateFunc = function(frame) {
+		return { left : -frame.x, top : -frame.y, width : frame.width, height : frame.height};
+	};
+	jeash.Lib.jeashCreateSurfaceAnimationCSS(div,spec,keyframeTpl,templateFunc,fps,true,true);
+	if(jeash.Lib.jeashIsOnStage(surface)) {
+		jeash.Lib.jeashAppendSurface(div);
+		jeash.Lib.jeashCopyStyle(surface,div);
+		jeash.Lib.jeashSwapSurface(surface,div);
+		jeash.Lib.jeashRemoveSurface(surface);
+	} else jeash.Lib.jeashCopyStyle(surface,div);
+	return div;
+}
 jeash.Lib.Run = function(tgt,width,height) {
 	jeash.Lib.mMe = new jeash.Lib(tgt.id,width,height);
-	jeash.Lib.jeashGetCanvas().width = width;
-	jeash.Lib.jeashGetCanvas().height = height;
-	if(!StringTools.startsWith(jeash.Lib.context,"swf")) {
-		var _g1 = 0, _g = tgt.attributes.length;
-		while(_g1 < _g) {
-			var i = _g1++;
-			var attr = tgt.attributes.item(i);
-			if(StringTools.startsWith(attr.name,"data-")) switch(attr.name) {
-			case "data-" + "framerate":
-				jeash.Lib.jeashGetStage().jeashSetFrameRate(Std.parseFloat(attr.value));
-				break;
-			default:
-			}
+	var _g1 = 0, _g = tgt.attributes.length;
+	while(_g1 < _g) {
+		var i = _g1++;
+		var attr = tgt.attributes.item(i);
+		if(StringTools.startsWith(attr.name,"data-")) switch(attr.name) {
+		case "data-" + "framerate":
+			jeash.Lib.jeashGetStage().jeashSetFrameRate(Std.parseFloat(attr.value));
+			break;
+		default:
 		}
-		var _g = 0, _g1 = ["resize","mouseup","mouseover","mouseout","mousemove","mousedown","mousewheel","focus","dblclick","click","blur"];
-		while(_g < _g1.length) {
-			var type = _g1[_g];
-			++_g;
-			tgt.addEventListener(type,($_=jeash.Lib.jeashGetStage(),$_.jeashProcessStageEvent.$bind($_)),true);
-		}
-		var _g = 0, _g1 = ["keyup","keypress","keydown"];
-		while(_g < _g1.length) {
-			var type = _g1[_g];
-			++_g;
-			var window = js.Lib.window;
-			window.addEventListener(type,($_=jeash.Lib.jeashGetStage(),$_.jeashProcessStageEvent.$bind($_)),true);
-		}
-		jeash.Lib.jeashGetStage().jeashSetBackgroundColour(tgt.style.backgroundColor != null && tgt.style.backgroundColor != ""?jeash.Lib.ParseColor(tgt.style.backgroundColor,function(res,pos,cur) {
-			return (function($this) {
-				var $r;
-				switch(pos) {
-				case 0:
-					$r = res | cur << 16;
-					break;
-				case 1:
-					$r = res | cur << 8;
-					break;
-				case 2:
-					$r = res | cur;
-					break;
-				}
-				return $r;
-			}(this));
-		}):16777215);
-		jeash.Lib.jeashGetCurrent().jeashGetGraphics().beginFill(jeash.Lib.jeashGetStage().jeashGetBackgroundColour());
-		jeash.Lib.jeashGetCurrent().jeashGetGraphics().drawRect(0,0,width,height);
-		jeash.Lib.jeashGetCurrent().jeashGetGraphics().jeashSurface.id = "Root MovieClip";
-		jeash.Lib.mMe.jeashTraceTextField = new jeash.text.TextField();
-		jeash.Lib.mMe.jeashTraceTextField.jeashSetWidth(jeash.Lib.jeashGetStage().jeashGetStageWidth());
-		jeash.Lib.mMe.jeashTraceTextField.SetWordWrap(true);
-		jeash.Lib.jeashGetCurrent().addChild(jeash.Lib.mMe.jeashTraceTextField);
-		jeash.Lib.jeashGetStage().jeashUpdateNextWake();
 	}
+	var _g = 0, _g1 = ["touchstart","touchmove","touchend"];
+	while(_g < _g1.length) {
+		var type = _g1[_g];
+		++_g;
+		tgt.addEventListener(type,($_=jeash.Lib.jeashGetStage(),$_.jeashQueueStageEvent.$bind($_)),true);
+	}
+	var _g = 0, _g1 = ["resize","mouseup","mouseover","mouseout","mousemove","mousedown","mousewheel","dblclick","click"];
+	while(_g < _g1.length) {
+		var type = _g1[_g];
+		++_g;
+		tgt.addEventListener(type,($_=jeash.Lib.jeashGetStage(),$_.jeashQueueStageEvent.$bind($_)),true);
+	}
+	var window = js.Lib.window;
+	var _g = 0, _g1 = ["keyup","keypress","keydown","resize"];
+	while(_g < _g1.length) {
+		var type = _g1[_g];
+		++_g;
+		window.addEventListener(type,($_=jeash.Lib.jeashGetStage(),$_.jeashQueueStageEvent.$bind($_)),false);
+	}
+	jeash.Lib.jeashGetStage().jeashSetBackgroundColour(tgt.style.backgroundColor != null && tgt.style.backgroundColor != ""?jeash.Lib.jeashParseColor(tgt.style.backgroundColor,function(res,pos,cur) {
+		return (function($this) {
+			var $r;
+			switch(pos) {
+			case 0:
+				$r = res | cur << 16;
+				break;
+			case 1:
+				$r = res | cur << 8;
+				break;
+			case 2:
+				$r = res | cur;
+				break;
+			}
+			return $r;
+		}(this));
+	}):16777215);
+	jeash.Lib.jeashGetCurrent().jeashGetGraphics().beginFill(jeash.Lib.jeashGetStage().jeashGetBackgroundColour());
+	jeash.Lib.jeashGetCurrent().jeashGetGraphics().drawRect(0,0,width,height);
+	jeash.Lib.jeashSetSurfaceId(jeash.Lib.jeashGetCurrent().jeashGetGraphics().jeashSurface,"Root MovieClip");
+	jeash.Lib.jeashGetStage().jeashUpdateNextWake();
 	return jeash.Lib.mMe;
 }
-jeash.Lib.ParseColor = function(str,cb) {
+jeash.Lib.jeashParseColor = function(str,cb) {
 	var re = new EReg("rgb\\(([0-9]*), ?([0-9]*), ?([0-9]*)\\)","");
 	var hex = new EReg("#([0-9a-zA-Z][0-9a-zA-Z])([0-9a-zA-Z][0-9a-zA-Z])([0-9a-zA-Z][0-9a-zA-Z])","");
 	if(re.match(str)) {
@@ -6675,28 +7053,36 @@ jeash.Lib.ParseColor = function(str,cb) {
 	} else throw "Cannot parse color '" + str + "'.";
 }
 jeash.Lib.jeashGetWidth = function() {
-	var tgt = js.Lib.document.getElementById("haxe:jeash");
+	var tgt = jeash.Lib.mMe != null?jeash.Lib.mMe.__scr:js.Lib.document.getElementById("haxe:jeash");
 	return tgt.clientWidth > 0?tgt.clientWidth:500;
 }
 jeash.Lib.jeashGetHeight = function() {
-	var tgt = js.Lib.document.getElementById("haxe:jeash");
+	var tgt = jeash.Lib.mMe != null?jeash.Lib.mMe.__scr:js.Lib.document.getElementById("haxe:jeash");
 	return tgt.clientHeight > 0?tgt.clientHeight:500;
 }
 jeash.Lib.jeashBootstrap = function() {
-	var tgt = js.Lib.document.getElementById("haxe:jeash");
-	var lib = jeash.Lib.Run(tgt,jeash.Lib.jeashGetWidth(),jeash.Lib.jeashGetHeight());
-	return lib;
+	if(jeash.Lib.mMe == null) {
+		var tgt = js.Lib.document.getElementById("haxe:jeash");
+		jeash.Lib.Run(tgt,jeash.Lib.jeashGetWidth(),jeash.Lib.jeashGetHeight());
+	}
 }
 jeash.Lib.prototype = {
 	mKilled: null
-	,mRequestedWidth: null
-	,mRequestedHeight: null
-	,mResizePending: null
 	,__scr: null
 	,mArgs: null
-	,jeashTraceTextField: null
 	,__class__: jeash.Lib
 }
+if(!jeash._Lib) jeash._Lib = {}
+jeash._Lib.CursorType = $hxClasses["jeash._Lib.CursorType"] = { __ename__ : ["jeash","_Lib","CursorType"], __constructs__ : ["Pointer","Text","Default"] }
+jeash._Lib.CursorType.Pointer = ["Pointer",0];
+jeash._Lib.CursorType.Pointer.toString = $estr;
+jeash._Lib.CursorType.Pointer.__enum__ = jeash._Lib.CursorType;
+jeash._Lib.CursorType.Text = ["Text",1];
+jeash._Lib.CursorType.Text.toString = $estr;
+jeash._Lib.CursorType.Text.__enum__ = jeash._Lib.CursorType;
+jeash._Lib.CursorType.Default = ["Default",2];
+jeash._Lib.CursorType.Default.toString = $estr;
+jeash._Lib.CursorType.Default.__enum__ = jeash._Lib.CursorType;
 if(!jeash.accessibility) jeash.accessibility = {}
 jeash.accessibility.AccessibilityProperties = $hxClasses["jeash.accessibility.AccessibilityProperties"] = function() {
 	this.description = "";
@@ -6720,10 +7106,13 @@ jeash.display.Bitmap = $hxClasses["jeash.display.Bitmap"] = function(inBitmapDat
 	jeash.display.DisplayObject.call(this);
 	this.pixelSnapping = inPixelSnapping;
 	this.smoothing = inSmoothing;
-	this.name = "Bitmap " + jeash.display.DisplayObject.mNameID++;
+	this.name = "Bitmap_" + jeash.display.DisplayObject.mNameID++;
 	this.jeashGraphics = new jeash.display.Graphics();
-	if(inBitmapData != null) this.jeashSetBitmapData(inBitmapData);
-	this.jeashGraphics.jeashSurface.id = this.name;
+	jeash.Lib.jeashSetSurfaceId(this.jeashGraphics.jeashSurface,this.name);
+	if(inBitmapData != null) {
+		this.jeashSetBitmapData(inBitmapData);
+		this.jeashRender(null,null);
+	}
 };
 jeash.display.Bitmap.__name__ = ["jeash","display","Bitmap"];
 jeash.display.Bitmap.__super__ = jeash.display.DisplayObject;
@@ -6815,8 +7204,17 @@ jeash.display.BitmapData = $hxClasses["jeash.display.BitmapData"] = function(inW
 	this.mTextureBuffer = js.Lib.document.createElement("canvas");
 	this.mTextureBuffer.width = inWidth;
 	this.mTextureBuffer.height = inHeight;
+	jeash.Lib.jeashSetSurfaceId(this.mTextureBuffer,"BitmapData " + jeash.display.BitmapData.mNameID++);
 	this.jeashTransparent = inTransparent;
 	this.rect = new jeash.geom.Rectangle(0,0,inWidth,inHeight);
+	if(this.jeashTransparent) {
+		this.jeashTransparentFiller = js.Lib.document.createElement("canvas");
+		this.jeashTransparentFiller.width = inWidth;
+		this.jeashTransparentFiller.height = inHeight;
+		var ctx = this.jeashTransparentFiller.getContext("2d");
+		ctx.fillStyle = "rgba(0,0,0,0);";
+		ctx.fill();
+	}
 	if(inFillColor != null) {
 		if(!this.jeashTransparent) inFillColor |= -16777216;
 		this.jeashInitColor = inFillColor;
@@ -6829,6 +7227,70 @@ jeash.display.BitmapData.jeashCreateFromHandle = function(inHandle) {
 	var result = new jeash.display.BitmapData(0,0);
 	result.mTextureBuffer = inHandle;
 	return result;
+}
+jeash.display.BitmapData.jeashBase64Encode = function(bytes) {
+	var blob = "";
+	var codex = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
+	bytes.position = 0;
+	while(bytes.position < bytes.length) {
+		var by1 = 0, by2 = 0, by3 = 0;
+		by1 = bytes.readByte();
+		if(bytes.position < bytes.length) by2 = bytes.readByte();
+		if(bytes.position < bytes.length) by3 = bytes.readByte();
+		var by4 = 0, by5 = 0, by6 = 0, by7 = 0;
+		by4 = by1 >> 2;
+		by5 = (by1 & 3) << 4 | by2 >> 4;
+		by6 = (by2 & 15) << 2 | by3 >> 6;
+		by7 = by3 & 63;
+		blob += codex.charAt(by4);
+		blob += codex.charAt(by5);
+		if(bytes.position < bytes.length) blob += codex.charAt(by6); else blob += "=";
+		if(bytes.position < bytes.length) blob += codex.charAt(by7); else blob += "=";
+	}
+	return blob;
+}
+jeash.display.BitmapData.jeashIsPNG = function(bytes) {
+	bytes.position = 0;
+	return bytes.readByte() == 137 && bytes.readByte() == 80 && bytes.readByte() == 78 && bytes.readByte() == 71 && bytes.readByte() == 13 && bytes.readByte() == 10 && bytes.readByte() == 26 && bytes.readByte() == 10;
+}
+jeash.display.BitmapData.jeashIsJPG = function(bytes) {
+	bytes.position = 0;
+	if(bytes.readByte() == 255 && bytes.readByte() == 216 && bytes.readByte() == 255 && bytes.readByte() == 224) {
+		bytes.readByte();
+		bytes.readByte();
+		if(bytes.readByte() == 74 && bytes.readByte() == 70 && bytes.readByte() == 73 && bytes.readByte() == 70 && bytes.readByte() == 0) return true;
+	}
+	return false;
+}
+jeash.display.BitmapData.loadFromBytes = function(bytes) {
+	var type = (function($this) {
+		var $r;
+		switch(true) {
+		case jeash.display.BitmapData.jeashIsPNG(bytes):
+			$r = "image/png";
+			break;
+		case jeash.display.BitmapData.jeashIsJPG(bytes):
+			$r = "image/jpeg";
+			break;
+		default:
+			$r = (function($this) {
+				var $r;
+				throw new jeash.errors.IOError("BitmapData tried to read a PNG/JPG ByteArray, but found an invalid header.");
+				return $r;
+			}($this));
+		}
+		return $r;
+	}(this));
+	var document = js.Lib.document;
+	var img = document.createElement("img");
+	img.src = "data:" + type + ";base64," + jeash.display.BitmapData.jeashBase64Encode(bytes);
+	var bitmapData = new jeash.display.BitmapData(0,0);
+	var canvas = bitmapData.mTextureBuffer;
+	canvas.width = img.width;
+	canvas.height = img.height;
+	canvas.getContext("2d").drawImage(img,0,0);
+	bitmapData.jeashImageDataChanged = true;
+	return bitmapData;
 }
 jeash.display.BitmapData.prototype = {
 	mTextureBuffer: null
@@ -6844,6 +7306,7 @@ jeash.display.BitmapData.prototype = {
 	,jeashLeaseNum: null
 	,jeashAssignedBitmaps: null
 	,jeashInitColor: null
+	,jeashTransparentFiller: null
 	,applyFilter: function(sourceBitmapData,sourceRect,destPoint,filter) {
 		throw "BitmapData.applyFilter not implemented in Jeash";
 	}
@@ -6900,8 +7363,13 @@ jeash.display.BitmapData.prototype = {
 		if(!this.jeashLocked) {
 			this.jeashLease.set(this.jeashLeaseNum++,Date.now().getTime());
 			var ctx = this.mTextureBuffer.getContext("2d");
+			if(this.jeashTransparent && sourceBitmapData.jeashTransparent) {
+				var trpCtx = sourceBitmapData.jeashTransparentFiller.getContext("2d");
+				var trpData = trpCtx.getImageData(sourceRect.x,sourceRect.y,sourceRect.width,sourceRect.height);
+				ctx.putImageData(trpData,destPoint.x,destPoint.y);
+			}
 			ctx.drawImage(sourceBitmapData.mTextureBuffer,sourceRect.x,sourceRect.y,sourceRect.width,sourceRect.height,destPoint.x,destPoint.y,sourceRect.width,sourceRect.height);
-		} else this.jeashCopyPixelList[this.jeashCopyPixelList.length] = { handle : sourceBitmapData.mTextureBuffer, sourceX : sourceRect.x, sourceY : sourceRect.y, sourceWidth : sourceRect.width, sourceHeight : sourceRect.height, destX : destPoint.x, destY : destPoint.y};
+		} else this.jeashCopyPixelList[this.jeashCopyPixelList.length] = { handle : sourceBitmapData.mTextureBuffer, transparentFiller : sourceBitmapData.jeashTransparentFiller, sourceX : sourceRect.x, sourceY : sourceRect.y, sourceWidth : sourceRect.width, sourceHeight : sourceRect.height, destX : destPoint.x, destY : destPoint.y};
 	}
 	,clipRect: function(r) {
 		if(r.x < 0) {
@@ -6935,6 +7403,11 @@ jeash.display.BitmapData.prototype = {
 		var b = color & 255;
 		var a = this.jeashTransparent?color >>> 24:255;
 		if(!this.jeashLocked) {
+			if(this.jeashTransparent) {
+				var trpCtx = this.jeashTransparentFiller.getContext("2d");
+				var trpData = trpCtx.getImageData(rect.x,rect.y,rect.width,rect.height);
+				ctx.putImageData(trpData,rect.x,rect.y);
+			}
 			var style = "rgba(";
 			style += r;
 			style += ", ";
@@ -6979,10 +7452,10 @@ jeash.display.BitmapData.prototype = {
 		return this.jeashFillRect(rect,color);
 	}
 	,getPixels: function(rect) {
-		var byteArray = new jeash.utils.ByteArray();
+		var len = Math.round(4 * rect.width * rect.height);
+		var byteArray = new jeash.utils.ByteArray(len);
 		rect = this.clipRect(rect);
 		if(rect == null) return byteArray;
-		var len = Math.round(4 * rect.width * rect.height);
 		if(!this.jeashLocked) {
 			var ctx = this.mTextureBuffer.getContext("2d");
 			var imagedata = ctx.getImageData(rect.x,rect.y,rect.width,rect.height);
@@ -7019,7 +7492,7 @@ jeash.display.BitmapData.prototype = {
 	}
 	,getInt32: function(offset,data) {
 		var b5, b6, b7, b8, pow = Math.pow;
-		b5 = data[offset + 3] & 255;
+		b5 = !this.jeashTransparent?255:data[offset + 3] & 255;
 		b6 = data[offset] & 255;
 		b7 = data[offset + 1] & 255;
 		b8 = data[offset + 2] & 255;
@@ -7169,6 +7642,11 @@ jeash.display.BitmapData.prototype = {
 		while(_g < _g1.length) {
 			var copyCache = _g1[_g];
 			++_g;
+			if(this.jeashTransparent && copyCache.transparentFiller != null) {
+				var trpCtx = copyCache.transparentFiller.getContext("2d");
+				var trpData = trpCtx.getImageData(copyCache.sourceX,copyCache.sourceY,copyCache.sourceWidth,copyCache.sourceHeight);
+				ctx.putImageData(trpData,copyCache.destX,copyCache.destY);
+			}
 			ctx.drawImage(copyCache.handle,copyCache.sourceX,copyCache.sourceY,copyCache.sourceWidth,copyCache.sourceHeight,copyCache.destX,copyCache.destY,copyCache.sourceWidth,copyCache.sourceHeight);
 		}
 		this.jeashLease.set(this.jeashLeaseNum++,Date.now().getTime());
@@ -7346,49 +7824,11 @@ jeash.display.BitmapDataChannel.__name__ = ["jeash","display","BitmapDataChannel
 jeash.display.BitmapDataChannel.prototype = {
 	__class__: jeash.display.BitmapDataChannel
 }
-jeash.display.BlendMode = $hxClasses["jeash.display.BlendMode"] = { __ename__ : ["jeash","display","BlendMode"], __constructs__ : ["ADD","ALPHA","DARKEN","DIFFERENCE","ERASE","HARDLIGHT","INVERT","LAYER","LIGHTEN","MULTIPLY","NORMAL","OVERLAY","SCREEN","SUBTRACT"] }
-jeash.display.BlendMode.ADD = ["ADD",0];
-jeash.display.BlendMode.ADD.toString = $estr;
-jeash.display.BlendMode.ADD.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.ALPHA = ["ALPHA",1];
-jeash.display.BlendMode.ALPHA.toString = $estr;
-jeash.display.BlendMode.ALPHA.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.DARKEN = ["DARKEN",2];
-jeash.display.BlendMode.DARKEN.toString = $estr;
-jeash.display.BlendMode.DARKEN.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.DIFFERENCE = ["DIFFERENCE",3];
-jeash.display.BlendMode.DIFFERENCE.toString = $estr;
-jeash.display.BlendMode.DIFFERENCE.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.ERASE = ["ERASE",4];
-jeash.display.BlendMode.ERASE.toString = $estr;
-jeash.display.BlendMode.ERASE.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.HARDLIGHT = ["HARDLIGHT",5];
-jeash.display.BlendMode.HARDLIGHT.toString = $estr;
-jeash.display.BlendMode.HARDLIGHT.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.INVERT = ["INVERT",6];
-jeash.display.BlendMode.INVERT.toString = $estr;
-jeash.display.BlendMode.INVERT.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.LAYER = ["LAYER",7];
-jeash.display.BlendMode.LAYER.toString = $estr;
-jeash.display.BlendMode.LAYER.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.LIGHTEN = ["LIGHTEN",8];
-jeash.display.BlendMode.LIGHTEN.toString = $estr;
-jeash.display.BlendMode.LIGHTEN.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.MULTIPLY = ["MULTIPLY",9];
-jeash.display.BlendMode.MULTIPLY.toString = $estr;
-jeash.display.BlendMode.MULTIPLY.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.NORMAL = ["NORMAL",10];
-jeash.display.BlendMode.NORMAL.toString = $estr;
-jeash.display.BlendMode.NORMAL.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.OVERLAY = ["OVERLAY",11];
-jeash.display.BlendMode.OVERLAY.toString = $estr;
-jeash.display.BlendMode.OVERLAY.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.SCREEN = ["SCREEN",12];
-jeash.display.BlendMode.SCREEN.toString = $estr;
-jeash.display.BlendMode.SCREEN.__enum__ = jeash.display.BlendMode;
-jeash.display.BlendMode.SUBTRACT = ["SUBTRACT",13];
-jeash.display.BlendMode.SUBTRACT.toString = $estr;
-jeash.display.BlendMode.SUBTRACT.__enum__ = jeash.display.BlendMode;
+jeash.display.BlendMode = $hxClasses["jeash.display.BlendMode"] = function() { }
+jeash.display.BlendMode.__name__ = ["jeash","display","BlendMode"];
+jeash.display.BlendMode.prototype = {
+	__class__: jeash.display.BlendMode
+}
 jeash.display.CapsStyle = $hxClasses["jeash.display.CapsStyle"] = { __ename__ : ["jeash","display","CapsStyle"], __constructs__ : ["NONE","ROUND","SQUARE"] }
 jeash.display.CapsStyle.NONE = ["NONE",0];
 jeash.display.CapsStyle.NONE.toString = $estr;
@@ -7458,17 +7898,15 @@ jeash.display.PointInPathMode.DEVICE_SPACE = ["DEVICE_SPACE",1];
 jeash.display.PointInPathMode.DEVICE_SPACE.toString = $estr;
 jeash.display.PointInPathMode.DEVICE_SPACE.__enum__ = jeash.display.PointInPathMode;
 jeash.display.Graphics = $hxClasses["jeash.display.Graphics"] = function(inSurface) {
+	jeash.Lib.jeashBootstrap();
 	if(inSurface == null) {
 		this.jeashSurface = js.Lib.document.createElement("canvas");
 		this.jeashSurface.width = 0;
 		this.jeashSurface.height = 0;
 	} else this.jeashSurface = inSurface;
-	this.mMatrix = new jeash.geom.Matrix();
 	this.mLastMoveID = 0;
 	this.mPenX = 0.0;
 	this.mPenY = 0.0;
-	this.originX = 0;
-	this.originY = 0;
 	this.mDrawList = new Array();
 	this.mPoints = [];
 	this.mSolidGradient = null;
@@ -7477,15 +7915,12 @@ jeash.display.Graphics = $hxClasses["jeash.display.Graphics"] = function(inSurfa
 	this.mFillColour = 0;
 	this.mFillAlpha = 0.0;
 	this.mLastMoveID = 0;
-	this.mNoClip = false;
 	this.jeashClearLine();
 	this.mLineJobs = [];
 	this.jeashChanged = true;
 	this.nextDrawIndex = 0;
-	this.jeashRenderFrame = 0;
-	this.jeashExtentBuffer = 0;
-	this.jeashIsTile = false;
 	this.jeashExtent = new jeash.geom.Rectangle();
+	this.jeashClearNextCycle = true;
 };
 jeash.display.Graphics.__name__ = ["jeash","display","Graphics"];
 jeash.display.Graphics.jeashDetectIsPointInPathMode = function() {
@@ -7504,7 +7939,6 @@ jeash.display.Graphics.prototype = {
 	jeashSurface: null
 	,jeashChanged: null
 	,mPoints: null
-	,mSolid: null
 	,mFilling: null
 	,mFillColour: null
 	,mFillAlpha: null
@@ -7512,22 +7946,15 @@ jeash.display.Graphics.prototype = {
 	,mBitmap: null
 	,mCurrentLine: null
 	,mLineJobs: null
-	,mNoClip: null
 	,mDrawList: null
 	,mLineDraws: null
 	,mPenX: null
 	,mPenY: null
 	,mLastMoveID: null
-	,mMatrix: null
-	,owner: null
 	,mBoundsDirty: null
 	,jeashExtent: null
-	,originX: null
-	,originY: null
 	,nextDrawIndex: null
-	,jeashRenderFrame: null
-	,jeashExtentBuffer: null
-	,jeashIsTile: null
+	,jeashClearNextCycle: null
 	,SetSurface: function(inSurface) {
 		this.jeashSurface = inSurface;
 	}
@@ -7543,7 +7970,7 @@ jeash.display.Graphics.prototype = {
 	,createCanvasGradient: function(ctx,g) {
 		var gradient;
 		var matrix = g.matrix;
-		if((g.flags & jeash.display.Graphics.RADIAL) == 0) {
+		if((g.flags & 1) == 0) {
 			var p1 = matrix.transformPoint(new jeash.geom.Point(-819.2,0));
 			var p2 = matrix.transformPoint(new jeash.geom.Point(819.2,0));
 			gradient = ctx.createLinearGradient(p1.x,p1.y,p2.x,p2.y);
@@ -7565,18 +7992,17 @@ jeash.display.Graphics.prototype = {
 	,jeashRender: function(maskHandle,matrix) {
 		if(!this.jeashChanged) return false;
 		this.ClosePolygon(true);
-		if(this.jeashExtent.width - this.jeashExtent.x != this.jeashSurface.width || this.jeashExtent.height - this.jeashExtent.y != this.jeashSurface.height) this.jeashAdjustSurface();
+		if(this.jeashExtent.width - this.jeashExtent.x > this.jeashSurface.width || this.jeashExtent.height - this.jeashExtent.y > this.jeashSurface.height) this.jeashAdjustSurface();
+		if(this.jeashClearNextCycle) {
+			this.jeashClearCanvas();
+			this.jeashClearNextCycle = false;
+		}
 		var ctx = (function($this) {
 			var $r;
 			try {
 				$r = $this.jeashSurface.getContext("2d");
 			} catch( e ) {
-				$r = (function($this) {
-					var $r;
-					jeash.Lib.trace("2d canvas API not implemented for: " + $this.jeashSurface);
-					$r = null;
-					return $r;
-				}($this));
+				$r = null;
 			}
 			return $r;
 		}(this));
@@ -7595,24 +8021,24 @@ jeash.display.Graphics.prototype = {
 					++_g1;
 					ctx.lineWidth = lj.thickness;
 					switch(lj.joints) {
-					case jeash.display.Graphics.CORNER_ROUND:
+					case 0:
 						ctx.lineJoin = "round";
 						break;
-					case jeash.display.Graphics.CORNER_MITER:
+					case 4096:
 						ctx.lineJoin = "miter";
 						break;
-					case jeash.display.Graphics.CORNER_BEVEL:
+					case 8192:
 						ctx.lineJoin = "bevel";
 						break;
 					}
 					switch(lj.caps) {
-					case jeash.display.Graphics.END_ROUND:
+					case 256:
 						ctx.lineCap = "round";
 						break;
-					case jeash.display.Graphics.END_SQUARE:
+					case 512:
 						ctx.lineCap = "square";
 						break;
-					case jeash.display.Graphics.END_NONE:
+					case 0:
 						ctx.lineCap = "butt";
 						break;
 					}
@@ -7624,10 +8050,10 @@ jeash.display.Graphics.prototype = {
 						var i1 = _g4++;
 						var p = d.points[i1];
 						switch(p.type) {
-						case jeash.display.Graphics.MOVE:
+						case 0:
 							ctx.moveTo(p.x,p.y);
 							break;
-						case jeash.display.Graphics.CURVE:
+						case 2:
 							ctx.quadraticCurveTo(p.cx,p.cy,p.x,p.y);
 							break;
 						default:
@@ -7644,10 +8070,10 @@ jeash.display.Graphics.prototype = {
 					var p = _g2[_g1];
 					++_g1;
 					switch(p.type) {
-					case jeash.display.Graphics.MOVE:
+					case 0:
 						ctx.moveTo(p.x,p.y);
 						break;
-					case jeash.display.Graphics.CURVE:
+					case 2:
 						ctx.quadraticCurveTo(p.cx,p.cy,p.x,p.y);
 						break;
 					default:
@@ -7686,12 +8112,7 @@ jeash.display.Graphics.prototype = {
 			try {
 				$r = $this.jeashSurface.getContext("2d");
 			} catch( e ) {
-				$r = (function($this) {
-					var $r;
-					jeash.Lib.trace("2d canvas API not implemented for: " + $this.jeashSurface);
-					$r = null;
-					return $r;
-				}($this));
+				$r = null;
 			}
 			return $r;
 		}(this));
@@ -7707,10 +8128,10 @@ jeash.display.Graphics.prototype = {
 				var p = _g3[_g2];
 				++_g2;
 				switch(p.type) {
-				case jeash.display.Graphics.MOVE:
+				case 0:
 					ctx.moveTo(p.x,p.y);
 					break;
-				case jeash.display.Graphics.CURVE:
+				case 2:
 					ctx.quadraticCurveTo(p.cx,p.cy,p.x,p.y);
 					break;
 				default:
@@ -7730,12 +8151,7 @@ jeash.display.Graphics.prototype = {
 			try {
 				$r = $this.jeashSurface.getContext("2d");
 			} catch( e ) {
-				$r = (function($this) {
-					var $r;
-					jeash.Lib.trace("2d canvas API not implemented for: " + $this.jeashSurface);
-					$r = null;
-					return $r;
-				}($this));
+				$r = null;
 			}
 			return $r;
 		}(this));
@@ -7752,49 +8168,49 @@ jeash.display.Graphics.prototype = {
 			this.mCurrentLine.colour = color == null?0:color;
 			this.mCurrentLine.alpha = alpha == null?1.0:alpha;
 			this.mCurrentLine.miter_limit = miterLimit == null?3.0:miterLimit;
-			this.mCurrentLine.pixel_hinting = pixelHinting == null || !pixelHinting?0:jeash.display.Graphics.PIXEL_HINTING;
+			this.mCurrentLine.pixel_hinting = pixelHinting == null || !pixelHinting?0:16384;
 		}
 		if(caps != null) {
 			switch( (caps)[1] ) {
 			case 1:
-				this.mCurrentLine.caps = jeash.display.Graphics.END_ROUND;
+				this.mCurrentLine.caps = 256;
 				break;
 			case 2:
-				this.mCurrentLine.caps = jeash.display.Graphics.END_SQUARE;
+				this.mCurrentLine.caps = 512;
 				break;
 			case 0:
-				this.mCurrentLine.caps = jeash.display.Graphics.END_NONE;
+				this.mCurrentLine.caps = 0;
 				break;
 			}
 		}
-		this.mCurrentLine.scale_mode = jeash.display.Graphics.SCALE_NORMAL;
+		this.mCurrentLine.scale_mode = 3;
 		if(scaleMode != null) {
 			switch( (scaleMode)[1] ) {
 			case 2:
-				this.mCurrentLine.scale_mode = jeash.display.Graphics.SCALE_NORMAL;
+				this.mCurrentLine.scale_mode = 3;
 				break;
 			case 3:
-				this.mCurrentLine.scale_mode = jeash.display.Graphics.SCALE_VERTICAL;
+				this.mCurrentLine.scale_mode = 1;
 				break;
 			case 0:
-				this.mCurrentLine.scale_mode = jeash.display.Graphics.SCALE_HORIZONTAL;
+				this.mCurrentLine.scale_mode = 2;
 				break;
 			case 1:
-				this.mCurrentLine.scale_mode = jeash.display.Graphics.SCALE_NONE;
+				this.mCurrentLine.scale_mode = 0;
 				break;
 			}
 		}
-		this.mCurrentLine.joints = jeash.display.Graphics.CORNER_ROUND;
+		this.mCurrentLine.joints = 0;
 		if(joints != null) {
 			switch( (joints)[1] ) {
 			case 1:
-				this.mCurrentLine.joints = jeash.display.Graphics.CORNER_ROUND;
+				this.mCurrentLine.joints = 0;
 				break;
 			case 0:
-				this.mCurrentLine.joints = jeash.display.Graphics.CORNER_MITER;
+				this.mCurrentLine.joints = 4096;
 				break;
 			case 2:
-				this.mCurrentLine.joints = jeash.display.Graphics.CORNER_BEVEL;
+				this.mCurrentLine.joints = 8192;
 				break;
 			}
 		}
@@ -7884,8 +8300,8 @@ jeash.display.Graphics.prototype = {
 			points.push({ col : colors[i], alpha : alphas[i], ratio : ratios[i]});
 		}
 		var flags = 0;
-		if(type == jeash.display.GradientType.RADIAL) flags |= jeash.display.Graphics.RADIAL;
-		if(spreadMethod == jeash.display.SpreadMethod.REPEAT) flags |= jeash.display.Graphics.SPREAD_REPEAT; else if(spreadMethod == jeash.display.SpreadMethod.REFLECT) flags |= jeash.display.Graphics.SPREAD_REFLECT;
+		if(type == jeash.display.GradientType.RADIAL) flags |= 1;
+		if(spreadMethod == jeash.display.SpreadMethod.REPEAT) flags |= 2; else if(spreadMethod == jeash.display.SpreadMethod.REFLECT) flags |= 4;
 		if(matrix == null) {
 			matrix = new jeash.geom.Matrix();
 			matrix.createGradientBox(25,25);
@@ -7906,10 +8322,10 @@ jeash.display.Graphics.prototype = {
 		this.mFilling = true;
 		this.mSolidGradient = null;
 		this.jeashExpandStandardExtent(bitmap.mTextureBuffer != null?bitmap.mTextureBuffer.width:0,bitmap.mTextureBuffer != null?bitmap.mTextureBuffer.height:0);
-		this.mBitmap = { texture_buffer : bitmap.mTextureBuffer, matrix : matrix == null?matrix:matrix.clone(), flags : (repeat?jeash.display.Graphics.BMP_REPEAT:0) | (smooth?jeash.display.Graphics.BMP_SMOOTH:0)};
+		this.mBitmap = { texture_buffer : bitmap.mTextureBuffer, matrix : matrix == null?matrix:matrix.clone(), flags : (repeat?16:0) | (smooth?65536:0)};
 	}
 	,jeashClearLine: function() {
-		this.mCurrentLine = new jeash.display.LineJob(null,-1,-1,0.0,0.0,0,1,jeash.display.Graphics.CORNER_ROUND,jeash.display.Graphics.END_ROUND,jeash.display.Graphics.SCALE_NORMAL,3.0);
+		this.mCurrentLine = new jeash.display.LineJob(null,-1,-1,0.0,0.0,0,1,0,256,3,3.0);
 	}
 	,jeashClearCanvas: function() {
 		if(this.jeashSurface != null) {
@@ -7929,12 +8345,8 @@ jeash.display.Graphics.prototype = {
 		this.mFillColour = 0;
 		this.mFillAlpha = 0.0;
 		this.mLastMoveID = 0;
-		this.jeashClearCanvas();
+		this.jeashClearNextCycle = true;
 		this.mLineJobs = [];
-		if(!this.mBoundsDirty) {
-			this.mBoundsDirty = true;
-			if(this.owner != null) this.owner.jeashInvalidateBounds();
-		}
 	}
 	,jeashExpandStandardExtent: function(x,y) {
 		var maxX, minX, maxY, minY;
@@ -7958,19 +8370,19 @@ jeash.display.Graphics.prototype = {
 		if(!this.mFilling) this.ClosePolygon(false); else {
 			this.AddLineSegment();
 			this.mLastMoveID = this.mPoints.length;
-			this.mPoints.push(new jeash.display.GfxPoint(this.mPenX,this.mPenY,0.0,0.0,jeash.display.Graphics.MOVE));
+			this.mPoints.push(new jeash.display.GfxPoint(this.mPenX,this.mPenY,0.0,0.0,0));
 		}
 	}
 	,lineTo: function(inX,inY) {
 		var pid = this.mPoints.length;
 		if(pid == 0) {
-			this.mPoints.push(new jeash.display.GfxPoint(this.mPenX,this.mPenY,0.0,0.0,jeash.display.Graphics.MOVE));
+			this.mPoints.push(new jeash.display.GfxPoint(this.mPenX,this.mPenY,0.0,0.0,0));
 			pid++;
 		}
 		this.mPenX = inX;
 		this.mPenY = inY;
 		this.jeashExpandStandardExtent(inX,inY);
-		this.mPoints.push(new jeash.display.GfxPoint(this.mPenX,this.mPenY,0.0,0.0,jeash.display.Graphics.LINE));
+		this.mPoints.push(new jeash.display.GfxPoint(this.mPenX,this.mPenY,0.0,0.0,1));
 		if(this.mCurrentLine.grad != null || this.mCurrentLine.alpha > 0) {
 			if(this.mCurrentLine.point_idx0 < 0) this.mCurrentLine.point_idx0 = pid - 1;
 			this.mCurrentLine.point_idx1 = pid;
@@ -7980,13 +8392,13 @@ jeash.display.Graphics.prototype = {
 	,curveTo: function(inCX,inCY,inX,inY) {
 		var pid = this.mPoints.length;
 		if(pid == 0) {
-			this.mPoints.push(new jeash.display.GfxPoint(this.mPenX,this.mPenY,0.0,0.0,jeash.display.Graphics.MOVE));
+			this.mPoints.push(new jeash.display.GfxPoint(this.mPenX,this.mPenY,0.0,0.0,0));
 			pid++;
 		}
 		this.mPenX = inX;
 		this.mPenY = inY;
 		this.jeashExpandStandardExtent(inX,inY);
-		this.mPoints.push(new jeash.display.GfxPoint(inX,inY,inCX,inCY,jeash.display.Graphics.CURVE));
+		this.mPoints.push(new jeash.display.GfxPoint(inX,inY,inCX,inCY,2));
 		if(this.mCurrentLine.grad != null || this.mCurrentLine.alpha > 0) {
 			if(this.mCurrentLine.point_idx0 < 0) this.mCurrentLine.point_idx0 = pid - 1;
 			this.mCurrentLine.point_idx1 = pid;
@@ -8024,10 +8436,6 @@ jeash.display.Graphics.prototype = {
 			this.mFilling = false;
 		}
 		this.jeashChanged = true;
-		if(!this.mBoundsDirty) {
-			this.mBoundsDirty = true;
-			if(this.owner != null) this.owner.jeashInvalidateBounds();
-		}
 	}
 	,drawGraphicsData: function(points) {
 		var _g = 0;
@@ -8082,35 +8490,15 @@ jeash.display.Graphics.prototype = {
 			}
 		}
 	}
-	,drawTiles: function(sheet,xyid,smooth,flags) {
-		if(flags == null) flags = 0;
-		if(smooth == null) smooth = false;
-		this.jeashIsTile = true;
-		jeash.Lib.jeashDrawSurfaceRect(sheet.jeashSurface,this.jeashSurface,xyid[0],xyid[1],sheet.jeashTileRects[xyid[2]]);
-		if(flags != 0) {
-			if((flags & 1) == 1) jeash.Lib.jeashSetSurfaceScale(this.jeashSurface,xyid[3]);
-			if((flags & 2) == 2) jeash.Lib.jeashSetSurfaceRotation(this.jeashSurface,xyid[4]);
-			if((flags & 8) == 8) jeash.Lib.jeashSetSurfaceOpacity(this.jeashSurface,xyid[8]);
-		}
-	}
-	,markBoundsClean: function() {
-		this.mBoundsDirty = false;
-	}
-	,markBoundsDirty: function() {
-		if(!this.mBoundsDirty) {
-			this.mBoundsDirty = true;
-			if(this.owner != null) this.owner.jeashInvalidateBounds();
-		}
-	}
 	,getContext: function() {
 		try {
 			return this.jeashSurface.getContext("2d");
 		} catch( e ) {
-			jeash.Lib.trace("2d canvas API not implemented for: " + this.jeashSurface);
 			return null;
 		}
 	}
 	,jeashAdjustSurface: function() {
+		if(Reflect.field(this.jeashSurface,"getContext") == null) return;
 		var width = Math.ceil(this.jeashExtent.width - this.jeashExtent.x);
 		var height = Math.ceil(this.jeashExtent.height - this.jeashExtent.y);
 		if(width > 5000 || height > 5000) return;
@@ -8118,6 +8506,7 @@ jeash.display.Graphics.prototype = {
 		var ctx = dstCanvas.getContext("2d");
 		dstCanvas.width = width;
 		dstCanvas.height = height;
+		if(this.jeashSurface.id != null) jeash.Lib.jeashSetSurfaceId(dstCanvas,this.jeashSurface.id);
 		jeash.Lib.jeashDrawToSurface(this.jeashSurface,dstCanvas);
 		if(jeash.Lib.jeashIsOnStage(this.jeashSurface)) {
 			jeash.Lib.jeashAppendSurface(dstCanvas);
@@ -8387,8 +8776,9 @@ jeash.display.Loader.prototype = $extend(jeash.display.DisplayObjectContainer.pr
 		}
 	}
 	,handleLoad: function(e) {
+		this.content.jeashInvalidateBounds();
+		this.content.jeashRender(null,null);
 		this.contentLoaderInfo.removeEventListener(jeash.events.Event.COMPLETE,this.handleLoad.$bind(this));
-		this.jeashInvalidateBounds();
 	}
 	,BuildBounds: function() {
 		jeash.display.DisplayObjectContainer.prototype.BuildBounds.call(this);
@@ -8398,6 +8788,9 @@ jeash.display.Loader.prototype = $extend(jeash.display.DisplayObjectContainer.pr
 				if(this.mBoundsRect.width == 0 && this.mBoundsRect.height == 0) this.mBoundsRect = r.clone(); else this.mBoundsRect.extendBounds(r);
 			}
 		}
+	}
+	,jeashIsOnStage: function() {
+		if(this.parent != null && this.parent.jeashIsOnStage() == true) return true; else return false;
 	}
 	,__class__: jeash.display.Loader
 });
@@ -8478,11 +8871,10 @@ jeash.display.PixelSnapping.ALWAYS = ["ALWAYS",2];
 jeash.display.PixelSnapping.ALWAYS.toString = $estr;
 jeash.display.PixelSnapping.ALWAYS.__enum__ = jeash.display.PixelSnapping;
 jeash.display.Shape = $hxClasses["jeash.display.Shape"] = function() {
-	jeash.Lib.jeashGetCanvas();
 	this.jeashGraphics = new jeash.display.Graphics();
-	if(this.jeashGraphics != null) this.jeashGraphics.owner = this;
 	jeash.display.DisplayObject.call(this);
 	this.name = "Shape " + jeash.display.DisplayObject.mNameID++;
+	jeash.Lib.jeashSetSurfaceId(this.jeashGraphics.jeashSurface,this.name);
 };
 jeash.display.Shape.__name__ = ["jeash","display","Shape"];
 jeash.display.Shape.__super__ = jeash.display.DisplayObject;
@@ -8493,7 +8885,8 @@ jeash.display.Shape.prototype = $extend(jeash.display.DisplayObject.prototype,{
 		return this.jeashGraphics;
 	}
 	,jeashGetObjectUnderPoint: function(point) {
-		return null;
+		if(this.parent == null) return null;
+		if(this.parent.mouseEnabled && jeash.display.DisplayObject.prototype.jeashGetObjectUnderPoint.call(this,point) == this) return this.parent; else return null;
 	}
 	,__class__: jeash.display.Shape
 	,__properties__: $extend(jeash.display.DisplayObject.prototype.__properties__,{get_graphics:"jeashGetGraphics"})
@@ -8534,6 +8927,27 @@ jeash.events.MouseEvent = $hxClasses["jeash.events.MouseEvent"] = function(type,
 	this.clickCount = clickCount;
 };
 jeash.events.MouseEvent.__name__ = ["jeash","events","MouseEvent"];
+jeash.events.MouseEvent.jeashCreate = function(type,event,local,target) {
+	var jeashMouseDown = false;
+	var delta = type == jeash.events.MouseEvent.MOUSE_WHEEL?(function($this) {
+		var $r;
+		var mouseEvent = event;
+		$r = mouseEvent.wheelDelta?js.Lib.isOpera?mouseEvent.wheelDelta / 40 | 0:mouseEvent.wheelDelta / 120 | 0:mouseEvent.detail?-mouseEvent.detail | 0:null;
+		return $r;
+	}(this)):2;
+	if(type == jeash.events.MouseEvent.MOUSE_DOWN) jeashMouseDown = event.which != null?event.which == 1:event.button != null?js.Lib.isIE && event.button == 1 || event.button == 0:false; else if(type == jeash.events.MouseEvent.MOUSE_UP) {
+		if(event.which != null) {
+			if(event.which == 1) jeashMouseDown = false; else if(event.button != null) {
+				if(js.Lib.isIE && event.button == 1 || event.button == 0) jeashMouseDown = false; else jeashMouseDown = false;
+			}
+		}
+	}
+	var pseudoEvent = new jeash.events.MouseEvent(type,true,false,local.x,local.y,null,event.ctrlKey,event.altKey,event.shiftKey,jeashMouseDown,delta);
+	pseudoEvent.stageX = jeash.Lib.jeashGetCurrent().GetStage().jeashGetMouseX();
+	pseudoEvent.stageY = jeash.Lib.jeashGetCurrent().GetStage().jeashGetMouseY();
+	pseudoEvent.target = target;
+	return pseudoEvent;
+}
 jeash.events.MouseEvent.__super__ = jeash.events.Event;
 jeash.events.MouseEvent.prototype = $extend(jeash.events.Event.prototype,{
 	altKey: null
@@ -8557,9 +8971,67 @@ jeash.events.MouseEvent.prototype = $extend(jeash.events.Event.prototype,{
 	}
 	,__class__: jeash.events.MouseEvent
 });
+jeash.events.TouchEvent = $hxClasses["jeash.events.TouchEvent"] = function(type,bubbles,cancelable,localX,localY,relatedObject,ctrlKey,altKey,shiftKey,buttonDown,delta,commandKey,clickCount) {
+	if(clickCount == null) clickCount = 0;
+	if(commandKey == null) commandKey = false;
+	if(delta == null) delta = 0;
+	if(buttonDown == null) buttonDown = false;
+	if(shiftKey == null) shiftKey = false;
+	if(altKey == null) altKey = false;
+	if(ctrlKey == null) ctrlKey = false;
+	if(localY == null) localY = 0;
+	if(localX == null) localX = 0;
+	if(cancelable == null) cancelable = false;
+	if(bubbles == null) bubbles = true;
+	jeash.events.Event.call(this,type,bubbles,cancelable);
+	this.shiftKey = shiftKey;
+	this.altKey = altKey;
+	this.ctrlKey = ctrlKey;
+	this.bubbles = bubbles;
+	this.relatedObject = relatedObject;
+	this.delta = delta;
+	this.localX = localX;
+	this.localY = localY;
+	this.buttonDown = buttonDown;
+	this.commandKey = commandKey;
+	this.touchPointID = 0;
+	this.isPrimaryTouchPoint = true;
+};
+jeash.events.TouchEvent.__name__ = ["jeash","events","TouchEvent"];
+jeash.events.TouchEvent.jeashCreate = function(type,event,touch,local,target) {
+	var evt = new jeash.events.TouchEvent(type,true,false,local.x,local.y,null,event.ctrlKey,event.altKey,event.shiftKey,false,0,null,0);
+	evt.stageX = jeash.Lib.jeashGetCurrent().GetStage().jeashGetMouseX();
+	evt.stageY = jeash.Lib.jeashGetCurrent().GetStage().jeashGetMouseY();
+	evt.target = target;
+	return evt;
+}
+jeash.events.TouchEvent.__super__ = jeash.events.Event;
+jeash.events.TouchEvent.prototype = $extend(jeash.events.Event.prototype,{
+	altKey: null
+	,buttonDown: null
+	,ctrlKey: null
+	,delta: null
+	,localX: null
+	,localY: null
+	,relatedObject: null
+	,shiftKey: null
+	,stageX: null
+	,stageY: null
+	,commandKey: null
+	,isPrimaryTouchPoint: null
+	,touchPointID: null
+	,jeashCreateSimilar: function(type,related,targ) {
+		var result = new jeash.events.TouchEvent(type,this.bubbles,this.cancelable,this.localX,this.localY,related == null?this.relatedObject:related,this.ctrlKey,this.altKey,this.shiftKey,this.buttonDown,this.delta,this.commandKey);
+		result.touchPointID = this.touchPointID;
+		result.isPrimaryTouchPoint = this.isPrimaryTouchPoint;
+		if(targ != null) result.target = targ;
+		return result;
+	}
+	,__class__: jeash.events.TouchEvent
+});
 jeash.display.Stage = $hxClasses["jeash.display.Stage"] = function(width,height) {
 	jeash.display.DisplayObjectContainer.call(this);
-	this.mFocusObject = null;
+	this.jeashFocusObject = null;
 	this.jeashWindowWidth = width;
 	this.jeashWindowHeight = height;
 	this.stageFocusRect = false;
@@ -8572,11 +9044,13 @@ jeash.display.Stage = $hxClasses["jeash.display.Stage"] = function(width,height)
 	this.loaderInfo = jeash.display.LoaderInfo.create(null);
 	this.loaderInfo.parameters.width = Std.string(this.jeashWindowWidth);
 	this.loaderInfo.parameters.height = Std.string(this.jeashWindowHeight);
-	this.mProjMatrix = [1.,0,0,0,0,1,0,0,0,0,-1,-1,0,0,0,0];
 	this.jeashPointInPathMode = jeash.display.Graphics.jeashDetectIsPointInPathMode();
 	this.jeashMouseOverObjects = [];
-	this.jeashMouseDown = false;
 	this.jeashSetShowDefaultContextMenu(true);
+	this.jeashTouchInfo = [];
+	this.jeashFocusOverObjects = [];
+	this.jeashUIEventsQueue = new Array(1000);
+	this.jeashUIEventsQueueIndex = 0;
 };
 jeash.display.Stage.__name__ = ["jeash","display","Stage"];
 jeash.display.Stage.__super__ = jeash.display.DisplayObjectContainer;
@@ -8585,18 +9059,20 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 	,jeashWindowHeight: null
 	,jeashTimer: null
 	,jeashInterval: null
-	,jeashFastMode: null
 	,jeashDragObject: null
 	,jeashDragBounds: null
 	,jeashDragOffsetX: null
 	,jeashDragOffsetY: null
 	,jeashMouseOverObjects: null
 	,jeashStageMatrix: null
-	,jeashMouseDown: null
 	,jeashStageActive: null
 	,jeashFrameRate: null
 	,jeashBackgroundColour: null
 	,jeashShowDefaultContextMenu: null
+	,jeashTouchInfo: null
+	,jeashFocusOverObjects: null
+	,jeashUIEventsQueue: null
+	,jeashUIEventsQueueIndex: null
 	,jeashPointInPathMode: null
 	,stageWidth: null
 	,stageHeight: null
@@ -8617,8 +9093,7 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 	,jeashGetStageHeight: function() {
 		return this.jeashWindowHeight;
 	}
-	,mFocusObject: null
-	,mProjMatrix: null
+	,jeashFocusObject: null
 	,jeashStartDrag: function(sprite,lockCenter,bounds) {
 		if(lockCenter == null) lockCenter = false;
 		this.jeashDragBounds = bounds == null?null:bounds.clone();
@@ -8653,9 +9128,33 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 		this.jeashDragBounds = null;
 		this.jeashDragObject = null;
 	}
-	,jeashCheckInOuts: function(event,stack) {
-		var prev = this.jeashMouseOverObjects;
-		var events = jeash.display.Stage.jeashMouseChanges;
+	,jeashCheckFocusInOuts: function(event,inStack) {
+		var new_n = inStack.length;
+		var new_obj = new_n > 0?inStack[new_n - 1]:null;
+		var old_n = this.jeashFocusOverObjects.length;
+		var old_obj = old_n > 0?this.jeashFocusOverObjects[old_n - 1]:null;
+		if(new_obj != old_obj) {
+			var common = 0;
+			while(common < new_n && common < old_n && inStack[common] == this.jeashFocusOverObjects[common]) common++;
+			var focusOut = new jeash.events.FocusEvent(jeash.events.FocusEvent.FOCUS_OUT,false,false,new_obj,false,0);
+			var i = old_n - 1;
+			while(i >= common) {
+				this.jeashFocusOverObjects[i].dispatchEvent(focusOut);
+				i--;
+			}
+			var focusIn = new jeash.events.FocusEvent(jeash.events.FocusEvent.FOCUS_IN,false,false,old_obj,false,0);
+			var i1 = new_n - 1;
+			while(i1 >= common) {
+				inStack[i1].dispatchEvent(focusIn);
+				i1--;
+			}
+			this.jeashFocusOverObjects = inStack;
+			this.jeashSetFocus(new_obj);
+		}
+	}
+	,jeashCheckInOuts: function(event,stack,touchInfo) {
+		var prev = touchInfo == null?this.jeashMouseOverObjects:touchInfo.touchOverObjects;
+		var events = touchInfo == null?jeash.display.Stage.jeashMouseChanges:jeash.display.Stage.jeashTouchChanges;
 		var new_n = stack.length;
 		var new_obj = new_n > 0?stack[new_n - 1]:null;
 		var old_n = prev.length;
@@ -8677,12 +9176,18 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 				stack[i1].dispatchEvent(rollOver);
 				i1--;
 			}
-			this.jeashMouseOverObjects = stack;
+			if(touchInfo == null) this.jeashMouseOverObjects = stack; else touchInfo.touchOverObjects = stack;
 		}
+	}
+	,jeashQueueStageEvent: function(evt) {
+		this.jeashUIEventsQueue[this.jeashUIEventsQueueIndex++] = evt;
 	}
 	,jeashProcessStageEvent: function(evt) {
 		evt.stopPropagation();
 		switch(evt.type) {
+		case "resize":
+			this.jeashOnResize(this.jeashGetStageWidth(),this.jeashGetStageHeight());
+			break;
 		case "mousemove":
 			this.jeashOnMouse(evt,jeash.events.MouseEvent.MOUSE_MOVE);
 			break;
@@ -8708,12 +9213,7 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 				try {
 					$r = jeash.ui.Keyboard.jeashConvertWebkitCode(evt1.keyIdentifier);
 				} catch( e ) {
-					$r = (function($this) {
-						var $r;
-						jeash.Lib.trace("keydown error: " + e);
-						$r = evt1.keyCode;
-						return $r;
-					}($this));
+					$r = evt1.keyCode;
 				}
 				return $r;
 			}(this)):jeash.ui.Keyboard.jeashConvertMozillaCode(evt1.keyCode);
@@ -8726,16 +9226,29 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 				try {
 					$r = jeash.ui.Keyboard.jeashConvertWebkitCode(evt1.keyIdentifier);
 				} catch( e ) {
-					$r = (function($this) {
-						var $r;
-						jeash.Lib.trace("keyup error: " + e);
-						$r = evt1.keyCode;
-						return $r;
-					}($this));
+					$r = evt1.keyCode;
 				}
 				return $r;
 			}(this)):jeash.ui.Keyboard.jeashConvertMozillaCode(evt1.keyCode);
 			this.jeashOnKey(keyCode,false,evt1.keyLocation,evt1.ctrlKey,evt1.altKey,evt1.shiftKey);
+			break;
+		case "touchstart":
+			var evt1 = evt;
+			evt1.preventDefault();
+			var touchInfo = new jeash.display.TouchInfo();
+			this.jeashTouchInfo[evt1.changedTouches[0].identifier] = touchInfo;
+			this.jeashOnTouch(evt1,evt1.changedTouches[0],jeash.events.TouchEvent.TOUCH_BEGIN,touchInfo,false);
+			break;
+		case "touchmove":
+			var evt1 = evt;
+			var touchInfo = this.jeashTouchInfo[evt1.changedTouches[0].identifier];
+			this.jeashOnTouch(evt1,evt1.changedTouches[0],jeash.events.TouchEvent.TOUCH_MOVE,touchInfo,true);
+			break;
+		case "touchend":
+			var evt1 = evt;
+			var touchInfo = this.jeashTouchInfo[evt1.changedTouches[0].identifier];
+			this.jeashOnTouch(evt1,evt1.changedTouches[0],jeash.events.TouchEvent.TOUCH_END,touchInfo,true);
+			this.jeashTouchInfo[evt1.changedTouches[0].identifier] = null;
 			break;
 		default:
 		}
@@ -8751,33 +9264,57 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 		if(stack.length > 0) {
 			stack.reverse();
 			var local = obj.globalToLocal(point);
-			var evt = this.jeashCreateMouseEvent(type,event,local,obj);
+			var evt = jeash.events.MouseEvent.jeashCreate(type,event,local,obj);
 			this.jeashCheckInOuts(evt,stack);
+			if(type == jeash.events.MouseEvent.MOUSE_DOWN) this.jeashCheckFocusInOuts(evt,stack);
 			obj.jeashFireEvent(evt);
 		} else {
-			var evt = this.jeashCreateMouseEvent(type,event,point,null);
+			var evt = jeash.events.MouseEvent.jeashCreate(type,event,point,null);
 			this.jeashCheckInOuts(evt,stack);
+			if(type == jeash.events.MouseEvent.MOUSE_DOWN) this.jeashCheckFocusInOuts(evt,stack);
 		}
 	}
-	,jeashCreateMouseEvent: function(type,event,local,target) {
-		var delta = type == jeash.events.MouseEvent.MOUSE_WHEEL?(function($this) {
-			var $r;
-			var mouseEvent = event;
-			$r = mouseEvent.wheelDelta?js.Lib.isOpera?mouseEvent.wheelDelta / 40 | 0:mouseEvent.wheelDelta / 120 | 0:mouseEvent.detail?-mouseEvent.detail | 0:null;
-			return $r;
-		}(this)):2;
-		if(type == jeash.events.MouseEvent.MOUSE_DOWN) this.jeashMouseDown = event.which != null?event.which == 1:event.button != null?js.Lib.isIE && event.button == 1 || event.button == 0:false; else if(type == jeash.events.MouseEvent.MOUSE_UP) {
-			if(event.which != null) {
-				if(event.which == 1) this.jeashMouseDown = false; else if(event.button != null) {
-					if(js.Lib.isIE && event.button == 1 || event.button == 0) this.jeashMouseDown = false; else this.jeashMouseDown = false;
+	,jeashOnTouch: function(event,touch,type,touchInfo,isPrimaryTouchPoint) {
+		var point = new jeash.geom.Point(touch.pageX - jeash.Lib.mMe.__scr.offsetLeft + window.pageXOffset,touch.pageY - jeash.Lib.mMe.__scr.offsetTop + window.pageYOffset);
+		var obj = this.jeashGetObjectUnderPoint(point);
+		this.jeashSetMouseX(point.x);
+		this.jeashSetMouseY(point.y);
+		var stack = new Array();
+		if(obj != null) obj.jeashGetInteractiveObjectStack(stack);
+		if(stack.length > 0) {
+			stack.reverse();
+			var local = obj.globalToLocal(point);
+			var evt = jeash.events.TouchEvent.jeashCreate(type,event,touch,local,obj);
+			evt.touchPointID = touch.identifier;
+			evt.isPrimaryTouchPoint = isPrimaryTouchPoint;
+			this.jeashCheckInOuts(evt,stack,touchInfo);
+			obj.jeashFireEvent(evt);
+			var mouseType = (function($this) {
+				var $r;
+				switch(type) {
+				case jeash.events.TouchEvent.TOUCH_BEGIN:
+					$r = jeash.events.MouseEvent.MOUSE_DOWN;
+					break;
+				case jeash.events.TouchEvent.TOUCH_END:
+					$r = jeash.events.MouseEvent.MOUSE_UP;
+					break;
+				default:
+					$r = (function($this) {
+						var $r;
+						if($this.jeashDragObject != null) $this.jeashDrag(point);
+						$r = jeash.events.MouseEvent.MOUSE_MOVE;
+						return $r;
+					}($this));
 				}
-			}
+				return $r;
+			}(this));
+			obj.jeashFireEvent(jeash.events.MouseEvent.jeashCreate(mouseType,evt,local,obj));
+		} else {
+			var evt = jeash.events.TouchEvent.jeashCreate(type,event,touch,point,null);
+			evt.touchPointID = touch.identifier;
+			evt.isPrimaryTouchPoint = isPrimaryTouchPoint;
+			this.jeashCheckInOuts(evt,stack,touchInfo);
 		}
-		var pseudoEvent = new jeash.events.MouseEvent(type,true,false,local.x,local.y,null,event.ctrlKey,event.altKey,event.shiftKey,this.jeashMouseDown,delta);
-		pseudoEvent.stageX = this.jeashGetMouseX();
-		pseudoEvent.stageY = this.jeashGetMouseY();
-		pseudoEvent.target = target;
-		return pseudoEvent;
 	}
 	,jeashOnKey: function(code,pressed,inChar,ctrl,alt,shift) {
 		var event = new jeash.events.KeyboardEvent(pressed?jeash.events.KeyboardEvent.KEY_DOWN:jeash.events.KeyboardEvent.KEY_UP,true,false,inChar,code,shift || ctrl?1:0,ctrl,alt,shift);
@@ -8797,17 +9334,14 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 		this.jeashBackgroundColour = col;
 		return col;
 	}
-	,DoSetFocus: function(inObj,inKeyCode) {
-		return inObj;
+	,jeashSetFocus: function(inObj) {
+		return this.jeashFocusObject = inObj;
 	}
-	,SetFocus: function(inObj) {
-		return this.DoSetFocus(inObj,-1);
-	}
-	,GetFocus: function() {
-		return this.mFocusObject;
+	,jeashGetFocus: function() {
+		return this.jeashFocusObject;
 	}
 	,jeashRenderAll: function() {
-		this.jeashRender(this.jeashStageMatrix);
+		this.jeashRender(this.jeashStageMatrix,null);
 	}
 	,jeashRenderToCanvas: function(canvas) {
 		canvas.width = canvas.width;
@@ -8824,12 +9358,8 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 		return this.jeashFrameRate;
 	}
 	,jeashSetFrameRate: function(speed) {
-		if(StringTools.startsWith(jeash.Lib.context,"swf")) return speed;
 		var window = js.Lib.window;
-		if(speed == 0 && window.postMessage != null) this.jeashFastMode = true; else {
-			this.jeashFastMode = false;
-			this.jeashInterval = 1000.0 / speed | 0;
-		}
+		this.jeashInterval = 1000.0 / speed | 0;
 		this.jeashUpdateNextWake();
 		this.jeashFrameRate = speed;
 		return speed;
@@ -8837,10 +9367,7 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 	,jeashUpdateNextWake: function() {
 		var window = js.Lib.window;
 		window.clearInterval(this.jeashTimer);
-		if(this.jeashFastMode) {
-			window.addEventListener("message",this.jeashStageRender.$bind(this),false);
-			window.postMessage("a",window.location);
-		} else this.jeashTimer = window.setInterval(this.jeashStageRender.$bind(this),this.jeashInterval,[]);
+		this.jeashTimer = window.setInterval(this.jeashStageRender.$bind(this),this.jeashInterval,[]);
 	}
 	,jeashStageRender: function(_) {
 		if(!this.jeashStageActive) {
@@ -8850,12 +9377,17 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 			this.jeashBroadcast(event);
 			this.jeashStageActive = true;
 		}
+		var _g1 = 0, _g = this.jeashUIEventsQueueIndex;
+		while(_g1 < _g) {
+			var i = _g1++;
+			if(this.jeashUIEventsQueue[i] != null) this.jeashProcessStageEvent(this.jeashUIEventsQueue[i]);
+		}
+		this.jeashUIEventsQueueIndex = 0;
 		var event = new jeash.events.Event(jeash.events.Event.ENTER_FRAME);
 		this.jeashBroadcast(event);
 		this.jeashRenderAll();
 		var event1 = new jeash.events.Event(jeash.events.Event.RENDER);
 		this.jeashBroadcast(event1);
-		if(this.jeashFastMode) window.postMessage("a",window.location);
 	}
 	,jeashIsOnStage: function() {
 		return true;
@@ -8908,8 +9440,16 @@ jeash.display.Stage.prototype = $extend(jeash.display.DisplayObjectContainer.pro
 		return jeash.Lib.jeashFullScreenHeight();
 	}
 	,__class__: jeash.display.Stage
-	,__properties__: $extend(jeash.display.DisplayObjectContainer.prototype.__properties__,{get_fullScreenHeight:"jeashGetFullScreenHeight",get_fullScreenWidth:"jeashGetFullScreenWidth",set_displayState:"jeashSetDisplayState",get_displayState:"jeashGetDisplayState",set_showDefaultContextMenu:"jeashSetShowDefaultContextMenu",get_showDefaultContextMenu:"jeashGetShowDefaultContextMenu",set_backgroundColor:"jeashSetBackgroundColour",get_backgroundColor:"jeashGetBackgroundColour",set_focus:"SetFocus",get_focus:"GetFocus",set_quality:"jeashSetQuality",get_quality:"jeashGetQuality",set_frameRate:"jeashSetFrameRate",get_frameRate:"jeashGetFrameRate",get_stageHeight:"jeashGetStageHeight",get_stageWidth:"jeashGetStageWidth"})
+	,__properties__: $extend(jeash.display.DisplayObjectContainer.prototype.__properties__,{get_fullScreenHeight:"jeashGetFullScreenHeight",get_fullScreenWidth:"jeashGetFullScreenWidth",set_displayState:"jeashSetDisplayState",get_displayState:"jeashGetDisplayState",set_showDefaultContextMenu:"jeashSetShowDefaultContextMenu",get_showDefaultContextMenu:"jeashGetShowDefaultContextMenu",set_backgroundColor:"jeashSetBackgroundColour",get_backgroundColor:"jeashGetBackgroundColour",set_focus:"jeashSetFocus",get_focus:"jeashGetFocus",set_quality:"jeashSetQuality",get_quality:"jeashGetQuality",set_frameRate:"jeashSetFrameRate",get_frameRate:"jeashGetFrameRate",get_stageHeight:"jeashGetStageHeight",get_stageWidth:"jeashGetStageWidth"})
 });
+jeash.display.TouchInfo = $hxClasses["jeash.display.TouchInfo"] = function() {
+	this.touchOverObjects = [];
+};
+jeash.display.TouchInfo.__name__ = ["jeash","display","TouchInfo"];
+jeash.display.TouchInfo.prototype = {
+	touchOverObjects: null
+	,__class__: jeash.display.TouchInfo
+}
 jeash.display.StageAlign = $hxClasses["jeash.display.StageAlign"] = { __ename__ : ["jeash","display","StageAlign"], __constructs__ : ["TOP_RIGHT","TOP_LEFT","TOP","RIGHT","LEFT","BOTTOM_RIGHT","BOTTOM_LEFT","BOTTOM"] }
 jeash.display.StageAlign.TOP_RIGHT = ["TOP_RIGHT",0];
 jeash.display.StageAlign.TOP_RIGHT.toString = $estr;
@@ -8960,24 +9500,6 @@ jeash.display.StageScaleMode.NO_BORDER.__enum__ = jeash.display.StageScaleMode;
 jeash.display.StageScaleMode.EXACT_FIT = ["EXACT_FIT",3];
 jeash.display.StageScaleMode.EXACT_FIT.toString = $estr;
 jeash.display.StageScaleMode.EXACT_FIT.__enum__ = jeash.display.StageScaleMode;
-jeash.display.Tilesheet = $hxClasses["jeash.display.Tilesheet"] = function(bitmapData) {
-	this.jeashSurface = bitmapData.clone().mTextureBuffer;
-	this.jeashBitmapData = bitmapData;
-	this.jeashTileRects = [];
-	this.jeashTileHotspots = [];
-};
-jeash.display.Tilesheet.__name__ = ["jeash","display","Tilesheet"];
-jeash.display.Tilesheet.prototype = {
-	jeashTileRects: null
-	,jeashTileHotspots: null
-	,jeashSurface: null
-	,jeashBitmapData: null
-	,addTileRect: function(rect,hotspot) {
-		this.jeashTileRects.push(rect.clone());
-		if(hotspot != null) this.jeashTileHotspots.push(hotspot.clone()); else this.jeashTileHotspots.push(new jeash.geom.Point((rect.width - rect.x) / 2,(rect.height - rect.y) / 2));
-	}
-	,__class__: jeash.display.Tilesheet
-}
 if(!jeash.errors) jeash.errors = {}
 jeash.errors.Error = $hxClasses["jeash.errors.Error"] = function(message,id) {
 	if(id == null) id = 0;
@@ -9046,6 +9568,21 @@ jeash.events.FocusEvent.prototype = $extend(jeash.events.Event.prototype,{
 	,relatedObject: null
 	,__class__: jeash.events.FocusEvent
 });
+jeash.events.HTTPStatusEvent = $hxClasses["jeash.events.HTTPStatusEvent"] = function(type,bubbles,cancelable,status) {
+	if(status == null) status = 0;
+	if(cancelable == null) cancelable = false;
+	if(bubbles == null) bubbles = false;
+	this.status = status;
+	jeash.events.Event.call(this,type,bubbles,cancelable);
+};
+jeash.events.HTTPStatusEvent.__name__ = ["jeash","events","HTTPStatusEvent"];
+jeash.events.HTTPStatusEvent.__super__ = jeash.events.Event;
+jeash.events.HTTPStatusEvent.prototype = $extend(jeash.events.Event.prototype,{
+	responseHeaders: null
+	,responseURL: null
+	,status: null
+	,__class__: jeash.events.HTTPStatusEvent
+});
 jeash.events.IOErrorEvent = $hxClasses["jeash.events.IOErrorEvent"] = function(type,bubbles,cancelable,inText) {
 	if(inText == null) inText = "";
 	jeash.events.Event.call(this,type,bubbles,cancelable);
@@ -9077,6 +9614,22 @@ jeash.events.KeyboardEvent.prototype = $extend(jeash.events.Event.prototype,{
 	,shiftKey: null
 	,__class__: jeash.events.KeyboardEvent
 });
+jeash.events.ProgressEvent = $hxClasses["jeash.events.ProgressEvent"] = function(type,bubbles,cancelable,bytesLoaded,bytesTotal) {
+	if(bytesTotal == null) bytesTotal = 0;
+	if(bytesLoaded == null) bytesLoaded = 0;
+	if(cancelable == null) cancelable = false;
+	if(bubbles == null) bubbles = false;
+	jeash.events.Event.call(this,type,bubbles,cancelable);
+	this.bytesLoaded = bytesLoaded;
+	this.bytesTotal = bytesTotal;
+};
+jeash.events.ProgressEvent.__name__ = ["jeash","events","ProgressEvent"];
+jeash.events.ProgressEvent.__super__ = jeash.events.Event;
+jeash.events.ProgressEvent.prototype = $extend(jeash.events.Event.prototype,{
+	bytesLoaded: null
+	,bytesTotal: null
+	,__class__: jeash.events.ProgressEvent
+});
 jeash.events.TextEvent = $hxClasses["jeash.events.TextEvent"] = function(type,bubbles,cancelable,text) {
 	jeash.events.Event.call(this,type,bubbles,cancelable);
 	this.text = text;
@@ -9088,6 +9641,16 @@ jeash.events.TextEvent.__super__ = jeash.events.Event;
 jeash.events.TextEvent.prototype = $extend(jeash.events.Event.prototype,{
 	text: null
 	,__class__: jeash.events.TextEvent
+});
+jeash.events.TimerEvent = $hxClasses["jeash.events.TimerEvent"] = function(type,bubbles,cancelable) {
+	jeash.events.Event.call(this,type,bubbles,cancelable);
+};
+jeash.events.TimerEvent.__name__ = ["jeash","events","TimerEvent"];
+jeash.events.TimerEvent.__super__ = jeash.events.Event;
+jeash.events.TimerEvent.prototype = $extend(jeash.events.Event.prototype,{
+	updateAfterEvent: function() {
+	}
+	,__class__: jeash.events.TimerEvent
 });
 if(!jeash.filters) jeash.filters = {}
 jeash.filters.BitmapFilter = $hxClasses["jeash.filters.BitmapFilter"] = function(inType) {
@@ -9258,10 +9821,14 @@ jeash.geom.Matrix.prototype = {
 	,__class__: jeash.geom.Matrix
 }
 jeash.geom.Rectangle = $hxClasses["jeash.geom.Rectangle"] = function(inX,inY,inWidth,inHeight) {
-	this.x = inX == null?0:inX;
-	this.y = inY == null?0:inY;
-	this.width = inWidth == null?0:inWidth;
-	this.height = inHeight == null?0:inHeight;
+	if(inHeight == null) inHeight = 0.;
+	if(inWidth == null) inWidth = 0.;
+	if(inY == null) inY = 0.;
+	if(inX == null) inX = 0.;
+	this.x = inX;
+	this.y = inY;
+	this.width = inWidth;
+	this.height = inHeight;
 };
 jeash.geom.Rectangle.__name__ = ["jeash","geom","Rectangle"];
 jeash.geom.Rectangle.prototype = {
@@ -9625,7 +10192,7 @@ jeash.media.SoundChannel.prototype = $extend(jeash.events.EventDispatcher.protot
 			this.jeashAudio.removeEventListener("ended",this.__onSoundChannelFinished.$bind(this),false);
 			this.jeashAudio.removeEventListener("seeked",this.__onSoundSeeked.$bind(this),false);
 			this.jeashAudio = null;
-			var evt1 = new jeash.events.Event(jeash.events.Event.SOUND_COMPLETE);
+			var evt1 = new jeash.events.Event(jeash.events.Event.COMPLETE);
 			evt1.target = this;
 			this.dispatchEvent(evt1);
 			if(this.jeashRemoveRef != null) this.jeashRemoveRef();
@@ -9670,146 +10237,144 @@ jeash.net.URLLoader = $hxClasses["jeash.net.URLLoader"] = function(request) {
 jeash.net.URLLoader.__name__ = ["jeash","net","URLLoader"];
 jeash.net.URLLoader.__super__ = jeash.events.EventDispatcher;
 jeash.net.URLLoader.prototype = $extend(jeash.events.EventDispatcher.prototype,{
-	http: null
-	,bytesLoaded: null
+	bytesLoaded: null
 	,bytesTotal: null
 	,data: null
 	,dataFormat: null
 	,close: function() {
 	}
 	,load: function(request) {
-		this.http = new jeash.net._URLLoader.Http(request.url);
-		this.http.onData = this.onData.$bind(this);
-		this.http.onError = this.onError.$bind(this);
-		this.http.requestUrl(jeash.net._URLLoader.HttpType.STREAM(this.dataFormat == jeash.net.URLLoaderDataFormat.TEXT?jeash.net._URLLoader.DataFormat.TEXT:jeash.net._URLLoader.DataFormat.BINARY));
+		if(request.contentType == null) {
+			switch( (this.dataFormat)[1] ) {
+			case 0:
+				request.requestHeaders.push(new jeash.net.URLRequestHeader("Content-Type","application/octet-stream"));
+				break;
+			default:
+				request.requestHeaders.push(new jeash.net.URLRequestHeader("Content-Type","application/x-www-form-urlencoded"));
+			}
+		} else request.requestHeaders.push(new jeash.net.URLRequestHeader("Content-Type",request.contentType));
+		this.requestUrl(request.url,request.method,request.data,request.requestHeaders);
 	}
 	,onData: function(_) {
-		var content = this.http.getData();
-		switch( (this.dataFormat)[1] ) {
-		case 0:
-			this.data = new jeash.utils.ByteArray();
-			var _g1 = 0, _g = content.length;
-			while(_g1 < _g) {
-				var i = _g1++;
-				var c = content["cca"](i) & 255;
-				this.data.writeByte(c);
-			}
-			this.data.position = 0;
-			break;
-		case 1:
-			this.data = content;
-			break;
-		case 2:
-			throw "Not complete";
-			break;
-		}
+		var content = this.getData();
+		if(Std["is"](content,ArrayBuffer)) this.data = jeash.utils.ByteArray.jeashOfBuffer(content); else this.data = Std.string(content);
 		var evt = new jeash.events.Event(jeash.events.Event.COMPLETE);
+		evt.currentTarget = this;
 		this.dispatchEvent(evt);
 	}
 	,onError: function(msg) {
-		jeash.Lib.trace(msg);
 		var evt = new jeash.events.IOErrorEvent(jeash.events.IOErrorEvent.IO_ERROR);
+		evt.text = msg;
+		evt.currentTarget = this;
 		this.dispatchEvent(evt);
 	}
-	,__class__: jeash.net.URLLoader
-});
-if(!jeash.net._URLLoader) jeash.net._URLLoader = {}
-jeash.net._URLLoader.HttpType = $hxClasses["jeash.net._URLLoader.HttpType"] = { __ename__ : ["jeash","net","_URLLoader","HttpType"], __constructs__ : ["IMAGE","VIDEO","AUDIO","STREAM"] }
-jeash.net._URLLoader.HttpType.IMAGE = ["IMAGE",0];
-jeash.net._URLLoader.HttpType.IMAGE.toString = $estr;
-jeash.net._URLLoader.HttpType.IMAGE.__enum__ = jeash.net._URLLoader.HttpType;
-jeash.net._URLLoader.HttpType.VIDEO = ["VIDEO",1];
-jeash.net._URLLoader.HttpType.VIDEO.toString = $estr;
-jeash.net._URLLoader.HttpType.VIDEO.__enum__ = jeash.net._URLLoader.HttpType;
-jeash.net._URLLoader.HttpType.AUDIO = ["AUDIO",2];
-jeash.net._URLLoader.HttpType.AUDIO.toString = $estr;
-jeash.net._URLLoader.HttpType.AUDIO.__enum__ = jeash.net._URLLoader.HttpType;
-jeash.net._URLLoader.HttpType.STREAM = function(format) { var $x = ["STREAM",3,format]; $x.__enum__ = jeash.net._URLLoader.HttpType; $x.toString = $estr; return $x; }
-jeash.net._URLLoader.DataFormat = $hxClasses["jeash.net._URLLoader.DataFormat"] = { __ename__ : ["jeash","net","_URLLoader","DataFormat"], __constructs__ : ["BINARY","TEXT"] }
-jeash.net._URLLoader.DataFormat.BINARY = ["BINARY",0];
-jeash.net._URLLoader.DataFormat.BINARY.toString = $estr;
-jeash.net._URLLoader.DataFormat.BINARY.__enum__ = jeash.net._URLLoader.DataFormat;
-jeash.net._URLLoader.DataFormat.TEXT = ["TEXT",1];
-jeash.net._URLLoader.DataFormat.TEXT.toString = $estr;
-jeash.net._URLLoader.DataFormat.TEXT.__enum__ = jeash.net._URLLoader.DataFormat;
-jeash.net._URLLoader.Http = $hxClasses["jeash.net._URLLoader.Http"] = function(url) {
-	haxe.Http.call(this,url);
-};
-jeash.net._URLLoader.Http.__name__ = ["jeash","net","_URLLoader","Http"];
-jeash.net._URLLoader.Http.__super__ = haxe.Http;
-jeash.net._URLLoader.Http.prototype = $extend(haxe.Http.prototype,{
-	registerEvents: function(subject) {
-		subject.onload = this.onData.$bind(this);
-		subject.onerror = this.onError.$bind(this);
+	,onOpen: function() {
+		var evt = new jeash.events.Event(jeash.events.Event.OPEN);
+		evt.currentTarget = this;
+		this.dispatchEvent(evt);
 	}
-	,requestUrl: function(type) {
+	,onStatus: function(status) {
+		var evt = new jeash.events.HTTPStatusEvent(jeash.events.HTTPStatusEvent.HTTP_STATUS,false,false,status);
+		evt.currentTarget = this;
+		this.dispatchEvent(evt);
+	}
+	,onProgress: function(event) {
+		var evt = new jeash.events.ProgressEvent(jeash.events.ProgressEvent.PROGRESS);
+		evt.currentTarget = this;
+		evt.bytesLoaded = event.loaded;
+		evt.bytesTotal = event.total;
+		this.dispatchEvent(evt);
+	}
+	,registerEvents: function(subject) {
 		var self = this;
-		var $e = (type);
-		switch( $e[1] ) {
-		case 3:
-			var dataFormat = $e[2];
-			var xmlHttpRequest = new XMLHttpRequest();
-			switch( (dataFormat)[1] ) {
-			case 0:
-				xmlHttpRequest.overrideMimeType("text/plain; charset=x-user-defined");
+		if(typeof XMLHttpRequestProgressEvent != "undefined") subject.addEventListener("progress",this.onProgress.$bind(this),false);
+		subject.onreadystatechange = function() {
+			if(subject.readyState != 4) return;
+			var s = (function($this) {
+				var $r;
+				try {
+					$r = subject.status;
+				} catch( e ) {
+					$r = null;
+				}
+				return $r;
+			}(this));
+			if(s == undefined) s = null;
+			if(s != null) self.onStatus(s);
+			if(s != null && s >= 200 && s < 400) self.onData(subject.response); else switch(s) {
+			case null: case undefined:
+				self.onError("Failed to connect or resolve host");
+				break;
+			case 12029:
+				self.onError("Failed to connect to host");
+				break;
+			case 12007:
+				self.onError("Unknown host");
 				break;
 			default:
+				self.onError("Http Error #" + subject.status);
 			}
-			this.registerEvents(xmlHttpRequest);
-			var uri = null;
-			var $it0 = this.params.keys();
-			while( $it0.hasNext() ) {
-				var p = $it0.next();
-				uri = StringTools.urlDecode(p) + "=" + StringTools.urlEncode(this.params.get(p));
+		};
+	}
+	,requestUrl: function(url,method,data,requestHeaders) {
+		var xmlHttpRequest = new XMLHttpRequest();
+		this.registerEvents(xmlHttpRequest);
+		var uri = "";
+		switch(true) {
+		case Std["is"](data,jeash.utils.ByteArray):
+			var data1 = data;
+			switch( (this.dataFormat)[1] ) {
+			case 0:
+				uri = data1.jeashGetBuffer();
+				break;
+			default:
+				uri = data1.readUTFBytes(data1.length);
 			}
-			try {
-				if(uri != null) {
-					var question = this.url.split("?").length <= 1;
-					xmlHttpRequest.open("GET",this.url + (question?"?":"&") + uri,true);
-					uri = null;
-				} else xmlHttpRequest.open("GET",this.url,true);
-			} catch( e ) {
-				throw e.toString();
+			break;
+		case Std["is"](data,jeash.net.URLVariables):
+			var data1 = data;
+			var _g = 0, _g1 = Reflect.fields(data1);
+			while(_g < _g1.length) {
+				var p = _g1[_g];
+				++_g;
+				if(uri.length != 0) uri += "&";
+				uri += StringTools.urlEncode(p) + "=" + StringTools.urlEncode(Reflect.field(data1,p));
 			}
-			xmlHttpRequest.send(uri);
-			this.getData = function() {
-				return xmlHttpRequest.responseText;
-			};
 			break;
-		case 0:
-			var image = js.Lib.document.createElement("img");
-			this.registerEvents(image);
-			image.src = this.url;
-			image.style.display = "none";
-			js.Lib.document.body.appendChild(image);
-			this.getData = function() {
-				return image;
-			};
-			break;
-		case 2:
-			var audio = js.Lib.document.createElement("audio");
-			this.registerEvents(audio);
-			audio.src = this.url;
-			js.Lib.document.body.appendChild(audio);
-			this.getData = function() {
-				return audio;
-			};
-			break;
-		case 1:
-			var video = js.Lib.document.createElement("video");
-			this.registerEvents(video);
-			video.src = this.url;
-			video.style.display = "none";
-			js.Lib.document.body.appendChild(video);
-			this.getData = function() {
-				return video;
-			};
-			break;
+		default:
+			if(data != null) uri = data.toString();
 		}
+		try {
+			if(method == "GET" && uri != null) {
+				var question = url.split("?").length <= 1;
+				xmlHttpRequest.open(method,url + (question?"?":"&") + uri,true);
+				uri = "";
+			} else xmlHttpRequest.open(method,url,true);
+		} catch( e ) {
+			this.onError(e.toString());
+			return;
+		}
+		switch( (this.dataFormat)[1] ) {
+		case 0:
+			xmlHttpRequest.responseType = "arraybuffer";
+			break;
+		default:
+		}
+		var _g = 0;
+		while(_g < requestHeaders.length) {
+			var header = requestHeaders[_g];
+			++_g;
+			xmlHttpRequest.setRequestHeader(header.name,header.value);
+		}
+		xmlHttpRequest.send(uri);
+		this.onOpen();
+		this.getData = function() {
+			return xmlHttpRequest.response;
+		};
 	}
 	,getData: function() {
 	}
-	,__class__: jeash.net._URLLoader.Http
+	,__class__: jeash.net.URLLoader
 });
 jeash.net.URLLoaderDataFormat = $hxClasses["jeash.net.URLLoaderDataFormat"] = { __ename__ : ["jeash","net","URLLoaderDataFormat"], __constructs__ : ["BINARY","TEXT","VARIABLES"] }
 jeash.net.URLLoaderDataFormat.BINARY = ["BINARY",0];
@@ -9823,11 +10388,61 @@ jeash.net.URLLoaderDataFormat.VARIABLES.toString = $estr;
 jeash.net.URLLoaderDataFormat.VARIABLES.__enum__ = jeash.net.URLLoaderDataFormat;
 jeash.net.URLRequest = $hxClasses["jeash.net.URLRequest"] = function(inURL) {
 	if(inURL != null) this.url = inURL;
+	this.requestHeaders = [];
 };
 jeash.net.URLRequest.__name__ = ["jeash","net","URLRequest"];
 jeash.net.URLRequest.prototype = {
 	url: null
+	,requestHeaders: null
+	,method: null
+	,data: null
+	,contentType: null
 	,__class__: jeash.net.URLRequest
+}
+jeash.net.URLRequestHeader = $hxClasses["jeash.net.URLRequestHeader"] = function(name,value) {
+	this.name = name;
+	this.value = value;
+};
+jeash.net.URLRequestHeader.__name__ = ["jeash","net","URLRequestHeader"];
+jeash.net.URLRequestHeader.prototype = {
+	name: null
+	,value: null
+	,__class__: jeash.net.URLRequestHeader
+}
+jeash.net.URLVariables = $hxClasses["jeash.net.URLVariables"] = function(inEncoded) {
+	if(inEncoded != null) this.decode(inEncoded);
+};
+jeash.net.URLVariables.__name__ = ["jeash","net","URLVariables"];
+jeash.net.URLVariables.prototype = {
+	decode: function(inVars) {
+		var fields = Reflect.fields(this);
+		var _g = 0;
+		while(_g < fields.length) {
+			var f = fields[_g];
+			++_g;
+			Reflect.deleteField(this,f);
+		}
+		var fields1 = inVars.split(";").join("&").split("&");
+		var _g = 0;
+		while(_g < fields1.length) {
+			var f = fields1[_g];
+			++_g;
+			var eq = f.indexOf("=");
+			if(eq > 0) this[StringTools.urlDecode(f.substr(0,eq))] = StringTools.urlDecode(f.substr(eq + 1)); else if(eq != 0) this[StringTools.urlDecode(f)] = "";
+		}
+	}
+	,toString: function() {
+		var result = new Array();
+		var fields = Reflect.fields(this);
+		var _g = 0;
+		while(_g < fields.length) {
+			var f = fields[_g];
+			++_g;
+			result.push(StringTools.urlEncode(f) + "=" + StringTools.urlEncode(Reflect.field(this,f)));
+		}
+		return result.join("&");
+	}
+	,__class__: jeash.net.URLVariables
 }
 if(!jeash.system) jeash.system = {}
 jeash.system.LoaderContext = $hxClasses["jeash.system.LoaderContext"] = function(checkPolicyFile,applicationDomain,securityDomain) {
@@ -9883,13 +10498,18 @@ jeash.text.Font.prototype = {
 	}
 	,jeashGetAdvance: function(inGlyph,height) {
 		var m = this.jeashMetrics[inGlyph];
-		if(m == null) this.jeashMetrics[inGlyph] = m = this.jeashGlyphData.get(inGlyph)._width * this.jeashFontScale | 0;
+		if(m == null) {
+			var glyph = this.jeashGlyphData.get(inGlyph);
+			if(glyph == null) return 0;
+			this.jeashMetrics[inGlyph] = m = glyph._width * this.jeashFontScale | 0;
+		}
 		if(m == null) return 0;
 		return m;
 	}
 	,jeashRender: function(graphics,inChar,inX,inY,inOutline) {
 		var index = 0;
 		var glyph = this.jeashGlyphData.get(inChar);
+		if(glyph == null) return;
 		var commands = glyph.commands;
 		var data = glyph.data;
 		var _g = 0;
@@ -9945,13 +10565,11 @@ jeash.text.FontType.DEVICE.toString = $estr;
 jeash.text.FontType.DEVICE.__enum__ = jeash.text.FontType;
 jeash.text.TextField = $hxClasses["jeash.text.TextField"] = function() {
 	jeash.display.InteractiveObject.call(this);
-	this.mWidth = 40;
+	this.mWidth = 100;
 	this.mHeight = 20;
 	this.mHTMLMode = false;
 	this.multiline = false;
 	this.jeashGraphics = new jeash.display.Graphics();
-	this.jeashGraphics.jeashExtentBuffer = 0;
-	this.mCaretGfx = new jeash.display.Graphics();
 	this.mFace = jeash.text.TextField.mDefaultFont;
 	this.mAlign = jeash.text.TextFormatAlign.LEFT;
 	this.mParagraphs = new Array();
@@ -9970,12 +10588,13 @@ jeash.text.TextField = $hxClasses["jeash.text.TextField"] = function() {
 	this.mTryFreeType = true;
 	this.selectable = true;
 	this.mInsertPos = 0;
-	this.mInput = false;
+	this.jeashInputEnabled = false;
 	this.mDownChar = 0;
 	this.mSelectDrag = -1;
 	this.mLineInfo = [];
+	this.jeashSetDefaultTextFormat(new jeash.text.TextFormat());
 	this.name = "TextField " + jeash.display.DisplayObject.mNameID++;
-	this.jeashGraphics.jeashSurface.id = this.name;
+	jeash.Lib.jeashSetSurfaceId(this.jeashGraphics.jeashSurface,this.name);
 	this.SetBorderColor(0);
 	this.SetBorder(false);
 	this.SetBackgroundColor(16777215);
@@ -10027,7 +10646,7 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 	,mSelEnd: null
 	,mInsertPos: null
 	,mSelectDrag: null
-	,mInput: null
+	,jeashInputEnabled: null
 	,mWidth: null
 	,mHeight: null
 	,mSelectionAnchored: null
@@ -10035,113 +10654,26 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 	,mScrollH: null
 	,mScrollV: null
 	,jeashGraphics: null
-	,mCaretGfx: null
-	,ClearSelection: function() {
-		this.mSelStart = this.mSelEnd = -1;
-		this.mSelectionAnchored = false;
-		this.Rebuild();
-	}
-	,DeleteSelection: function() {
-		if(this.mSelEnd > this.mSelStart && this.mSelStart >= 0) {
-			this.mText = this.mText.substr(0,this.mSelStart) + this.mText.substr(this.mSelEnd);
-			this.mInsertPos = this.mSelStart;
-			this.mSelStart = this.mSelEnd = -1;
-			this.mSelectionAnchored = false;
-		}
-	}
-	,OnMoveKeyStart: function(inShift) {
-		if(inShift && this.selectable) {
-			if(!this.mSelectionAnchored) {
-				this.mSelectionAnchored = true;
-				this.mSelectionAnchor = this.mInsertPos;
-				if(jeash.text.TextField.sSelectionOwner != this) {
-					if(jeash.text.TextField.sSelectionOwner != null) jeash.text.TextField.sSelectionOwner.ClearSelection();
-					jeash.text.TextField.sSelectionOwner = this;
-				}
-			}
-		} else this.ClearSelection();
-	}
-	,OnMoveKeyEnd: function() {
-		if(this.mSelectionAnchored) {
-			if(this.mInsertPos < this.mSelectionAnchor) {
-				this.mSelStart = this.mInsertPos;
-				this.mSelEnd = this.mSelectionAnchor;
-			} else {
-				this.mSelStart = this.mSelectionAnchor;
-				this.mSelEnd = this.mInsertPos;
-			}
-		}
-	}
-	,OnKey: function(inKey) {
-		if(inKey.type != jeash.events.KeyboardEvent.KEY_DOWN) return;
-		var key = inKey.keyCode;
-		var ascii = inKey.charCode;
-		var shift = inKey.shiftKey;
-		if(ascii == 3) {
-			if(this.mSelEnd > this.mSelStart && this.mSelStart >= 0) throw "To implement setClipboardString. TextField.OnKey";
-			return;
-		}
-		if(this.mInput) {
-			if(key == jeash.ui.Keyboard.LEFT) {
-				this.OnMoveKeyStart(shift);
-				this.mInsertPos--;
-				this.OnMoveKeyEnd();
-			} else if(key == jeash.ui.Keyboard.RIGHT) {
-				this.OnMoveKeyStart(shift);
-				this.mInsertPos++;
-				this.OnMoveKeyEnd();
-			} else if(key == jeash.ui.Keyboard.HOME) {
-				this.OnMoveKeyStart(shift);
-				this.mInsertPos = 0;
-				this.OnMoveKeyEnd();
-			} else if(key == jeash.ui.Keyboard.END) {
-				this.OnMoveKeyStart(shift);
-				this.mInsertPos = this.mText.length;
-				this.OnMoveKeyEnd();
-			} else if(key == jeash.ui.Keyboard.DELETE || key == jeash.ui.Keyboard.BACKSPACE) {
-				if(this.mSelEnd > this.mSelStart && this.mSelStart >= 0) this.DeleteSelection(); else {
-					if(key == jeash.ui.Keyboard.BACKSPACE && this.mInsertPos > 0) this.mInsertPos--;
-					var l = this.mText.length;
-					if(this.mInsertPos > l) {
-						if(l > 0) this.mText = this.mText.substr(0,l - 1);
-					} else this.mText = this.mText.substr(0,this.mInsertPos) + this.mText.substr(this.mInsertPos + 1);
-				}
-			} else if(ascii >= 32 && ascii < 128) {
-				if(this.mSelEnd > this.mSelStart && this.mSelStart >= 0) this.DeleteSelection();
-				this.mText = this.mText.substr(0,this.mInsertPos) + String.fromCharCode(ascii) + this.mText.substr(this.mInsertPos);
-				this.mInsertPos++;
-			}
-			if(this.mInsertPos < 0) this.mInsertPos = 0;
-			var l = this.mText.length;
-			if(this.mInsertPos > l) this.mInsertPos = l;
-			this.RebuildText();
-		}
-	}
-	,OnFocusIn: function(inMouse) {
-		if(this.mInput && this.selectable && !inMouse) {
-			this.mSelStart = 0;
-			this.mSelEnd = this.mText.length;
-			this.RebuildText();
-		}
-	}
 	,jeashGetWidth: function() {
-		return this.mWidth;
+		return this.getBounds(this.GetStage()).width;
 	}
 	,jeashGetHeight: function() {
-		return this.mHeight;
+		return this.getBounds(this.GetStage()).height;
 	}
 	,jeashSetWidth: function(inWidth) {
+		if(this.parent != null) this.parent.jeashInvalidateBounds();
+		if(this.mBoundsDirty) this.BuildBounds();
 		if(inWidth != this.mWidth) {
 			this.mWidth = inWidth;
-			this.jeashGraphics.jeashSurface.width = Math.round(inWidth);
 			this.Rebuild();
 		}
 		return this.mWidth;
 	}
 	,jeashSetHeight: function(inHeight) {
+		if(this.parent != null) this.parent.jeashInvalidateBounds();
+		if(this.mBoundsDirty) this.BuildBounds();
 		if(inHeight != this.mHeight) {
 			this.mHeight = inHeight;
-			this.jeashGraphics.jeashSurface.height = Math.round(inHeight);
 			this.Rebuild();
 		}
 		return this.mHeight;
@@ -10151,8 +10683,13 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 	}
 	,SetType: function(inType) {
 		this.mType = inType;
-		this.mInput = this.mType == jeash.text.TextFieldType.INPUT;
-		if(this.mInput && this.mHTMLMode) this.ConvertHTMLToText(true);
+		this.jeashInputEnabled = this.mType == jeash.text.TextFieldType.INPUT;
+		if(this.mHTMLMode) {
+			if(this.jeashInputEnabled) jeash.Lib.jeashSetContentEditable(this.jeashGraphics.jeashSurface,true); else jeash.Lib.jeashSetContentEditable(this.jeashGraphics.jeashSurface,false);
+		} else if(this.jeashInputEnabled) {
+			this.SetHTMLText(StringTools.replace(this.mText,"\n","<BR />"));
+			jeash.Lib.jeashSetContentEditable(this.jeashGraphics.jeashSurface,true);
+		}
 		this.tabEnabled = this.GetType() == jeash.text.TextFieldType.INPUT;
 		this.Rebuild();
 		return inType;
@@ -10190,44 +10727,6 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 	,getCharBoundaries: function(a) {
 		return null;
 	}
-	,OnMouseDown: function(inX,inY) {
-		if(this.tabEnabled || this.selectable) {
-			if(jeash.text.TextField.sSelectionOwner != null) jeash.text.TextField.sSelectionOwner.ClearSelection();
-			jeash.text.TextField.sSelectionOwner = this;
-			this.GetStage().SetFocus(this);
-			var gx = inX / this.GetStage().jeashGetScaleX();
-			var gy = inY / this.GetStage().jeashGetScaleY();
-			var pos = this.globalToLocal(new jeash.geom.Point(gx,gy));
-			this.mSelectDrag = this.getCharIndexAtPoint(pos.x,pos.y);
-			if(this.tabEnabled) this.mInsertPos = this.mSelectDrag;
-			this.mSelStart = this.mSelEnd = -1;
-			this.RebuildText();
-		}
-	}
-	,OnMouseDrag: function(inX,inY) {
-		if((this.tabEnabled || this.selectable) && this.mSelectDrag >= 0) {
-			var gx = inX / this.GetStage().jeashGetScaleX();
-			var gy = inY / this.GetStage().jeashGetScaleY();
-			var pos = this.globalToLocal(new jeash.geom.Point(gx,gy));
-			var idx = this.getCharIndexAtPoint(pos.x,pos.y);
-			if(jeash.text.TextField.sSelectionOwner != this) {
-				if(jeash.text.TextField.sSelectionOwner != null) jeash.text.TextField.sSelectionOwner.ClearSelection();
-				jeash.text.TextField.sSelectionOwner = this;
-			}
-			if(idx < this.mSelectDrag) {
-				this.mSelStart = idx;
-				this.mSelEnd = this.mSelectDrag;
-			} else if(idx > this.mSelectDrag) {
-				this.mSelStart = this.mSelectDrag;
-				this.mSelEnd = idx;
-			} else this.mSelStart = this.mSelEnd = -1;
-			if(this.tabEnabled) this.mInsertPos = idx;
-			this.RebuildText();
-		}
-	}
-	,OnMouseUp: function(inX,inY) {
-		this.mSelectDrag = -1;
-	}
 	,mMaxWidth: null
 	,mMaxHeight: null
 	,mLimitRenderX: null
@@ -10259,7 +10758,7 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 			if(inAlign == jeash.text.TextFormatAlign.CENTER) align_x = this.mLimitRenderX - w >> 1; else if(inAlign == jeash.text.TextFormatAlign.RIGHT) align_x = this.mLimitRenderX - w;
 		}
 		var x_list = new Array();
-		this.mLineInfo.push({ mY0 : inY, mIndex : inCharIdx, mX : x_list});
+		this.mLineInfo.push({ mY0 : inY, mIndex : inCharIdx - 1, mX : x_list});
 		var cache_sel_font = null;
 		var cache_normal_font = null;
 		var x = align_x - this.mScrollH;
@@ -10289,17 +10788,12 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 			x += adv;
 		}
 		x += this.mScrollH;
-		if(inInsert != null) {
-			this.mCaretGfx.lineStyle(1,this.mTextColour);
-			this.mCaretGfx.moveTo(inInsert + align_x - this.mScrollH,inY);
-			this.mCaretGfx.lineTo(inInsert + align_x - this.mScrollH,inY + full_height);
-		}
 		return full_height;
 	}
 	,Rebuild: function() {
+		if(this.mHTMLMode) return;
 		this.mLineInfo = [];
 		this.jeashGraphics.clear();
-		this.mCaretGfx.clear();
 		if(this.background) {
 			this.jeashGraphics.beginFill(this.backgroundColor);
 			this.jeashGraphics.drawRect(-2,-2,this.jeashGetWidth() + 4,this.jeashGetHeight() + 4);
@@ -10308,7 +10802,7 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 		this.jeashGraphics.lineStyle(this.mTextColour);
 		var insert_x = null;
 		this.mMaxWidth = 0;
-		var wrap = this.mLimitRenderX = this.wordWrap && !this.mInput?this.jeashGetWidth() | 0:999999;
+		var wrap = this.mLimitRenderX = this.wordWrap && !this.jeashInputEnabled?this.mWidth | 0:999999;
 		var char_idx = 0;
 		var h = 0;
 		var s0 = this.mSelStart;
@@ -10337,7 +10831,6 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 				var _g5 = 0, _g4 = text.length;
 				while(_g5 < _g4) {
 					var ch = _g5++;
-					if(char_idx == this.mInsertPos && this.mInput) insert_x = tx;
 					var g = text.charCodeAt(ch);
 					var adv = font.jeashGetAdvance(g);
 					if(g == 32) {
@@ -10372,8 +10865,8 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 				}
 			}
 			if(row.length > 0) {
-				var pos = this.mInput && insert_x == null?tx:insert_x == null?0:insert_x;
-				h += this.RenderRow(row,h,start_idx,paragraph.align,pos);
+				h += this.RenderRow(row,h,start_idx,paragraph.align,insert_x);
+				insert_x = null;
 			}
 		}
 		var w = this.mMaxWidth;
@@ -10381,44 +10874,23 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 		this.mMaxHeight = h;
 		switch(this.autoSize) {
 		case jeash.text.TextFieldAutoSize.LEFT:
-			this.jeashSetWidth(w);
-			this.jeashSetHeight(h);
 			break;
 		case jeash.text.TextFieldAutoSize.RIGHT:
 			var x0 = this.jeashGetX() + this.jeashGetWidth();
-			this.jeashSetWidth(w);
-			this.jeashSetHeight(h);
-			this.jeashSetX(x0 - w);
+			this.jeashSetX(this.mWidth - x0);
 			break;
 		case jeash.text.TextFieldAutoSize.CENTER:
 			var x0 = this.jeashGetX() + this.jeashGetWidth() / 2;
-			this.jeashSetWidth(w);
-			this.jeashSetHeight(h);
-			this.jeashSetX(x0 - w / 2);
+			this.jeashSetX(this.mWidth / 2 - x0);
 			break;
 		default:
 			if(this.wordWrap) this.jeashSetHeight(h);
-		}
-		if(char_idx == 0 && this.mInput) {
-			var x = 0;
-			if(this.mAlign == jeash.text.TextFormatAlign.CENTER) x = this.jeashGetWidth() / 2 | 0; else if(this.mAlign == jeash.text.TextFormatAlign.RIGHT) x = (this.jeashGetWidth() | 0) - 1;
-			this.mCaretGfx.lineStyle(1,this.mTextColour);
-			this.mCaretGfx.moveTo(x,0);
-			this.mCaretGfx.lineTo(x,this.mTextHeight);
 		}
 		if(this.border) {
 			this.jeashGraphics.endFill();
 			this.jeashGraphics.lineStyle(1,this.borderColor);
 			this.jeashGraphics.drawRect(-2,-2,this.jeashGetWidth() + 4,this.jeashGetHeight() + 4);
 		}
-	}
-	,GetObj: function(inX,inY,inObj) {
-		var inv = this.mFullMatrix.clone();
-		inv.invert();
-		var px = inv.a * inX + inv.c * inY + inv.tx;
-		var py = inv.b * inX + inv.d * inY + inv.ty;
-		if(px > 0 && px < this.jeashGetWidth() && py > 0 && py < this.jeashGetHeight()) return this;
-		return null;
 	}
 	,GetBackgroundRect: function() {
 		if(this.border) return new jeash.geom.Rectangle(-2,-2,this.jeashGetWidth() + 4,this.jeashGetHeight() + 4); else return new jeash.geom.Rectangle(0,0,this.jeashGetWidth(),this.jeashGetHeight());
@@ -10443,9 +10915,9 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 	}
 	,SetText: function(inText) {
 		this.mText = inText;
-		this.mHTMLText = inText;
 		this.mHTMLMode = false;
 		this.RebuildText();
+		this.jeashInvalidateBounds();
 		return this.mText;
 	}
 	,ConvertHTMLToText: function(inUnSetHTML) {
@@ -10465,9 +10937,6 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 			this.mHTMLMode = false;
 			this.RebuildText();
 		}
-	}
-	,GetFocusObjects: function(outObjs) {
-		if(this.mInput) outObjs.push(this);
 	}
 	,SetAutoSize: function(inAutoSize) {
 		this.autoSize = inAutoSize;
@@ -10505,57 +10974,16 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 	,DecodeColour: function(col) {
 		return Std.parseInt("0x" + col.substr(1));
 	}
-	,AddXML: function(x,a) {
-		var type = x.nodeType;
-		if(type == Xml.Document || type == Xml.Element) {
-			if(type == Xml.Element) {
-				a = { face : a.face, height : a.height, colour : a.colour, align : a.align};
-				switch(x.getNodeName()) {
-				case "p":
-					var l = this.mParagraphs.length;
-					var align = x.get("align");
-					if(align != null) a.align = Type.createEnum(jeash.text.TextFormatAlign,align);
-					if(l > 0 && this.mParagraphs[l - 1].spans.length > 0 && this.multiline) this.mParagraphs.push({ align : a.align, spans : []});
-					break;
-				case "font":
-					var face = x.get("face");
-					if(face != null) a.face = face;
-					var height = x.get("size");
-					if(height != null) a.height = Std.parseFloat(height) | 0;
-					var col = x.get("color");
-					if(col != null) a.colour = this.DecodeColour(col);
-					break;
-				}
-			}
-			var $it0 = x.iterator();
-			while( $it0.hasNext() ) {
-				var child = $it0.next();
-				this.AddXML(child,a);
-			}
-		} else {
-			var text = x.getNodeValue();
-			var font = jeash.text.FontInstance.CreateSolid(a.face,a.height,a.colour,1.0);
-			if(font != null && text != "") {
-				var span = { text : text, font : font};
-				var l = this.mParagraphs.length;
-				if(this.mParagraphs.length < 1) this.mParagraphs.push({ align : a.align, spans : [span]}); else this.mParagraphs[l - 1].spans.push(span);
-			}
-		}
-	}
 	,RebuildText: function() {
 		this.mParagraphs = [];
-		if(this.mHTMLMode) {
-			var xml = Xml.parse(this.mHTMLText);
-			var a = { face : this.mFace, height : this.mTextHeight, colour : this.mTextColour, align : this.mAlign};
-			this.AddXML(xml,a);
-		} else {
+		if(!this.mHTMLMode) {
 			var font = jeash.text.FontInstance.CreateSolid(this.mFace,this.mTextHeight,this.mTextColour,1.0);
 			var paras = this.mText.split("\n");
 			var _g = 0;
 			while(_g < paras.length) {
 				var paragraph = paras[_g];
 				++_g;
-				this.mParagraphs.push({ align : this.mAlign, spans : [{ font : font, text : paragraph}]});
+				this.mParagraphs.push({ align : this.mAlign, spans : [{ font : font, text : paragraph + "\n"}]});
 			}
 		}
 		this.Rebuild();
@@ -10563,29 +10991,75 @@ jeash.text.TextField.prototype = $extend(jeash.display.InteractiveObject.prototy
 	,SetHTMLText: function(inHTMLText) {
 		this.mParagraphs = new Array();
 		this.mHTMLText = inHTMLText;
+		if(!this.mHTMLMode) {
+			var wrapper = js.Lib.document.createElement("div");
+			wrapper.innerHTML = inHTMLText;
+			var destination = new jeash.display.Graphics(wrapper);
+			var jeashSurface = this.jeashGraphics.jeashSurface;
+			if(jeash.Lib.jeashIsOnStage(jeashSurface)) {
+				jeash.Lib.jeashAppendSurface(wrapper);
+				jeash.Lib.jeashCopyStyle(jeashSurface,wrapper);
+				jeash.Lib.jeashSwapSurface(jeashSurface,wrapper);
+				jeash.Lib.jeashRemoveSurface(jeashSurface);
+			}
+			this.jeashGraphics = destination;
+			this.jeashGraphics.jeashExtent.width = wrapper.width;
+			this.jeashGraphics.jeashExtent.height = wrapper.height;
+		} else this.jeashGraphics.jeashSurface.innerHTML = inHTMLText;
 		this.mHTMLMode = true;
 		this.RebuildText();
-		if(this.mInput) this.ConvertHTMLToText(true);
+		this.jeashInvalidateBounds();
 		return this.mHTMLText;
 	}
 	,setSelection: function(beginIndex,endIndex) {
 	}
+	,jeashGetDefaultTextFormat: function() {
+		return this.defaultTextFormat;
+	}
+	,jeashSetDefaultTextFormat: function(inFmt) {
+		this.setTextFormat(inFmt);
+		return inFmt;
+	}
 	,getTextFormat: function(beginIndex,endIndex) {
 		return new jeash.text.TextFormat();
 	}
-	,getDefaultTextFormat: function() {
-		return new jeash.text.TextFormat();
-	}
-	,setTextFormat: function(inFmt) {
+	,setTextFormat: function(inFmt,beginIndex,endIndex) {
 		if(inFmt.font != null) this.mFace = inFmt.font;
 		if(inFmt.size != null) this.mTextHeight = inFmt.size | 0;
 		if(inFmt.align != null) this.mAlign = inFmt.align;
 		if(inFmt.color != null) this.mTextColour = inFmt.color;
 		this.RebuildText();
+		this.jeashInvalidateBounds();
 		return this.getTextFormat();
 	}
+	,jeashGetObjectUnderPoint: function(point) {
+		if(!this.jeashGetVisible()) return null; else if(this.mText.length > 1) {
+			var local = this.globalToLocal(point);
+			if(local.x < 0 || local.y < 0 || local.x > this.mMaxWidth || local.y > this.mMaxHeight) return null; else return this;
+		} else return jeash.display.InteractiveObject.prototype.jeashGetObjectUnderPoint.call(this,point);
+	}
+	,jeashRender: function(parentMatrix,inMask) {
+		if(!this.jeashVisible) return;
+		if(this.mMtxDirty || this.mMtxChainDirty) this.jeashValidateMatrix();
+		var m = this.mFullMatrix.clone();
+		if(!this.mHTMLMode && this.jeashFilters != null && (this.jeashGraphics.jeashChanged || inMask != null)) {
+			if(this.jeashGraphics.jeashRender(inMask,m)) this.jeashInvalidateBounds();
+			var _g = 0, _g1 = this.jeashFilters;
+			while(_g < _g1.length) {
+				var filter = _g1[_g];
+				++_g;
+				filter.jeashApplyFilter(this.jeashGraphics.jeashSurface);
+			}
+		} else if(this.jeashGraphics.jeashRender(inMask,m)) this.jeashInvalidateBounds();
+		m.tx = m.tx + this.jeashGraphics.jeashExtent.x * m.a + this.jeashGraphics.jeashExtent.y * m.c;
+		m.ty = m.ty + this.jeashGraphics.jeashExtent.x * m.b + this.jeashGraphics.jeashExtent.y * m.d;
+		if(!this.mHTMLMode && inMask != null) jeash.Lib.jeashDrawToSurface(this.jeashGraphics.jeashSurface,inMask,m,(this.parent != null?this.parent.alpha:1) * this.alpha); else {
+			jeash.Lib.jeashSetSurfaceTransform(this.jeashGraphics.jeashSurface,m);
+			jeash.Lib.jeashSetSurfaceOpacity(this.jeashGraphics.jeashSurface,(this.parent != null?this.parent.alpha:1) * this.alpha);
+		}
+	}
 	,__class__: jeash.text.TextField
-	,__properties__: $extend(jeash.display.InteractiveObject.prototype.__properties__,{set_type:"SetType",get_type:"GetType",set_wordWrap:"SetWordWrap",set_border:"SetBorder",get_caretPos:"GetCaret",set_backgroundColor:"SetBackgroundColor",set_background:"SetBackground",set_borderColor:"SetBorderColor",set_autoSize:"SetAutoSize",set_defaultTextFormat:"setTextFormat",get_defaultTextFormat:"getDefaultTextFormat",get_textHeight:"GetTextHeight",get_textWidth:"GetTextWidth",set_textColor:"SetTextColour",get_textColor:"GetTextColour",set_text:"SetText",get_text:"GetText",set_htmlText:"SetHTMLText",get_htmlText:"GetHTMLText"})
+	,__properties__: $extend(jeash.display.InteractiveObject.prototype.__properties__,{set_type:"SetType",get_type:"GetType",set_wordWrap:"SetWordWrap",set_border:"SetBorder",get_caretPos:"GetCaret",set_backgroundColor:"SetBackgroundColor",set_background:"SetBackground",set_borderColor:"SetBorderColor",set_autoSize:"SetAutoSize",set_defaultTextFormat:"jeashSetDefaultTextFormat",get_defaultTextFormat:"jeashGetDefaultTextFormat",get_textHeight:"GetTextHeight",get_textWidth:"GetTextWidth",set_textColor:"SetTextColour",get_textColor:"GetTextColour",set_text:"SetText",get_text:"GetText",set_htmlText:"SetHTMLText",get_htmlText:"GetHTMLText"})
 });
 jeash.text.FontInstanceMode = $hxClasses["jeash.text.FontInstanceMode"] = { __ename__ : ["jeash","text","FontInstanceMode"], __constructs__ : ["fimSolid"] }
 jeash.text.FontInstanceMode.fimSolid = ["fimSolid",0];
@@ -10817,86 +11291,71 @@ jeash.ui.Keyboard.prototype = {
 	__class__: jeash.ui.Keyboard
 }
 if(!jeash.utils) jeash.utils = {}
-jeash.utils.ByteArray = $hxClasses["jeash.utils.ByteArray"] = function() {
+jeash.utils.ByteArray = $hxClasses["jeash.utils.ByteArray"] = function(len) {
+	if(len == null) len = 8192;
 	this.position = 0;
-	this.data = [];
-	this.TWOeN23 = Math.pow(2,-23);
-	this.pow = Math.pow;
-	this.LN2 = Math.log(2);
-	this.abs = Math.abs;
-	this.log = Math.log;
-	this.floor = Math.floor;
+	this.length = 0;
+	var buffer = new ArrayBuffer(len);
+	this.data = new DataView(buffer);
+	this.byteView = new Uint8Array(buffer);
 	this.bigEndian = false;
 };
 jeash.utils.ByteArray.__name__ = ["jeash","utils","ByteArray"];
+jeash.utils.ByteArray.jeashOfBuffer = function(buffer) {
+	var bytes = new jeash.utils.ByteArray(buffer.byteLength);
+	bytes.data = new DataView(buffer);
+	bytes.byteView = new Uint8Array(buffer);
+	return bytes;
+}
 jeash.utils.ByteArray.prototype = {
 	data: null
+	,byteView: null
 	,bigEndian: null
 	,bytesAvailable: null
 	,endian: null
 	,objectEncoding: null
 	,position: null
 	,length: null
-	,TWOeN23: null
-	,pow: null
-	,LN2: null
-	,abs: null
-	,log: null
-	,floor: null
-	,GetBytesAvailable: function() {
-		return this.GetLength() - this.position;
-	}
-	,readString: function(len) {
-		var bytes = haxe.io.Bytes.alloc(len);
-		this.readFullBytes(bytes,0,len);
-		return bytes.toString();
+	,jeashGetBytesAvailable: function() {
+		return this.length - this.position;
 	}
 	,readFullBytes: function(bytes,pos,len) {
 		var _g1 = pos, _g = pos + len;
 		while(_g1 < _g) {
 			var i = _g1++;
-			this.data[this.position++] = bytes.b[i];
+			this.data.setInt8(this.position++,bytes.b[i]);
 		}
 	}
-	,read: function(nbytes) {
-		var s = new jeash.utils.ByteArray();
-		this.readBytes(s,0,nbytes);
-		return haxe.io.Bytes.ofData(s.data);
-	}
-	,GetLength: function() {
-		return this.data.length;
+	,jeashResizeBuffer: function(len) {
+		var initLength = this.byteView.length;
+		var resized = new Uint8Array(len);
+		resized.set(this.byteView);
+		this.data = new DataView(resized.buffer);
+		this.byteView = resized;
 	}
 	,readByte: function() {
-		if(this.position >= this.GetLength()) throw new jeash.errors.IOError("Read error - Out of bounds");
-		return this.data[this.position++];
+		return this.data.getUint8(this.position++);
 	}
 	,readBytes: function(bytes,offset,length) {
-		if(offset < 0 || length < 0 || offset + length > this.data.length) throw new jeash.errors.IOError("Read error - Out of bounds");
-		if(this.data.length == 0 && length > 0) throw new jeash.errors.IOError("Read error - Out of bounds");
-		if(this.data.length < length) length = this.data.length;
-		var b1 = this.data;
-		var b2 = bytes;
-		b2.position = offset;
-		var _g = 0;
-		while(_g < length) {
-			var i = _g++;
-			b2.writeByte(b1[this.position + i]);
-		}
-		b2.position = offset;
+		if(offset < 0 || length < 0) throw new jeash.errors.IOError("Read error - Out of bounds");
+		if(bytes.byteView.length < length + offset) bytes.jeashResizeBuffer(offset + length);
+		bytes.byteView.set(this.byteView.subarray(this.position,this.position + length),offset);
+		bytes.position = offset;
 		this.position += length;
+		if(bytes.position + length > bytes.length) bytes.length = bytes.position + length;
 	}
 	,writeByte: function(value) {
-		this.data[this.position++] = value;
+		if(this.position + 1 >= this.byteView.length) this.jeashResizeBuffer(this.position + 1);
+		this.data.setInt8(this.position++,value);
+		this.length++;
 	}
 	,writeBytes: function(bytes,offset,length) {
-		if(offset < 0 || length < 0 || offset + length > bytes.GetLength()) throw new jeash.errors.IOError("Write error - Out of bounds");
-		var b2 = bytes;
-		b2.position = offset;
-		var _g = 0;
-		while(_g < length) {
-			var i = _g++;
-			this.data[this.position++] = b2.readByte();
-		}
+		if(offset < 0 || length < 0) throw new jeash.errors.IOError("Write error - Out of bounds");
+		if(this.byteView.length < length + this.position) this.jeashResizeBuffer(this.position + length);
+		bytes.position = offset + length;
+		this.byteView.set(bytes.byteView.subarray(offset,offset + length),this.position);
+		this.position += length;
+		if(this.position > this.length) this.length = this.position;
 	}
 	,readBoolean: function() {
 		return this.readByte() == 1?true:false;
@@ -10905,207 +11364,135 @@ jeash.utils.ByteArray.prototype = {
 		this.writeByte(value?1:0);
 	}
 	,readDouble: function() {
-		var data = this.data, pos, b1, b2, b3, b4, b5, b6, b7, b8;
-		if(this.bigEndian) {
-			pos = (this.position += 8) - 8;
-			b1 = data[pos] & 255;
-			b2 = data[++pos] & 255;
-			b3 = data[++pos] & 255;
-			b4 = data[++pos] & 255;
-			b5 = data[++pos] & 255;
-			b6 = data[++pos] & 255;
-			b7 = data[++pos] & 255;
-			b8 = data[++pos] & 255;
-		} else {
-			pos = this.position += 8;
-			b1 = data[--pos] & 255;
-			b2 = data[--pos] & 255;
-			b3 = data[--pos] & 255;
-			b4 = data[--pos] & 255;
-			b5 = data[--pos] & 255;
-			b6 = data[--pos] & 255;
-			b7 = data[--pos] & 255;
-			b8 = data[--pos] & 255;
-		}
-		var sign = 1 - (b1 >> 7 << 1);
-		var exp = (b1 << 4 & 2047 | b2 >> 4) - 1023;
-		var sig = parseInt((((b2 & 15) << 16 | b3 << 8 | b4) * this.pow(2,32)).toString(2),2) + parseInt(((b5 >> 7) * this.pow(2,31)).toString(2),2) + parseInt(((b5 & 127) << 24 | b6 << 16 | b7 << 8 | b8).toString(2),2);
-		if(sig == 0 && exp == -1023) return 0.0;
-		return sign * (1.0 + this.pow(2,-52) * sig) * this.pow(2,exp);
+		var $double = this.data.getFloat64(this.position,!this.bigEndian);
+		this.position += 8;
+		return $double;
 	}
 	,writeDouble: function(x) {
-		if(x == 0.0) {
-			var _g = 0;
-			while(_g < 8) {
-				var _ = _g++;
-				this.data[this.position++] = 0;
-			}
-		}
-		var exp = this.floor(this.log(this.abs(x)) / this.LN2);
-		var sig = this.floor(this.abs(x) / this.pow(2,exp) * this.pow(2,52));
-		var sig_h = sig & 34359738367;
-		var sig_l = this.floor(sig / this.pow(2,32));
-		var b1 = exp + 1023 >> 4 | (exp > 0?x < 0?128:64:x < 0?128:0), b2 = exp + 1023 << 4 & 255 | sig_l >> 16 & 15, b3 = sig_l >> 8 & 255, b4 = sig_l & 255, b5 = sig_h >> 24 & 255, b6 = sig_h >> 16 & 255, b7 = sig_h >> 8 & 255, b8 = sig_h & 255;
-		if(this.bigEndian) {
-			this.data[this.position++] = b1;
-			this.data[this.position++] = b2;
-			this.data[this.position++] = b3;
-			this.data[this.position++] = b4;
-			this.data[this.position++] = b5;
-			this.data[this.position++] = b6;
-			this.data[this.position++] = b7;
-			this.data[this.position++] = b8;
-		} else {
-			this.data[this.position++] = b8;
-			this.data[this.position++] = b7;
-			this.data[this.position++] = b6;
-			this.data[this.position++] = b5;
-			this.data[this.position++] = b4;
-			this.data[this.position++] = b3;
-			this.data[this.position++] = b2;
-			this.data[this.position++] = b1;
-		}
+		if(this.position + 8 >= this.byteView.length) this.jeashResizeBuffer(this.position + 8);
+		this.data.setFloat64(this.position,x,!this.bigEndian);
+		this.position += 8;
+		if(this.position > this.length) this.length = this.position;
 	}
 	,readFloat: function() {
-		var data = this.data, pos, b1, b2, b3, b4;
-		if(this.bigEndian) {
-			pos = (this.position += 4) - 4;
-			b1 = data[pos] & 255;
-			b2 = data[++pos] & 255;
-			b3 = data[++pos] & 255;
-			b4 = data[++pos] & 255;
-		} else {
-			pos = this.position += 4;
-			b1 = data[--pos] & 255;
-			b2 = data[--pos] & 255;
-			b3 = data[--pos] & 255;
-			b4 = data[--pos] & 255;
-		}
-		var sign = 1 - (b1 >> 7 << 1);
-		var exp = (b1 << 1 & 255 | b2 >> 7) - 127;
-		var sig = (b2 & 127) << 16 | b3 << 8 | b4;
-		if(sig == 0 && exp == -127) return 0.0;
-		return sign * (1 + this.TWOeN23 * sig) * this.pow(2,exp);
+		var $float = this.data.getFloat32(this.position,!this.bigEndian);
+		this.position += 4;
+		return $float;
 	}
 	,writeFloat: function(x) {
-		if(x == 0.0) {
-			var _g = 0;
-			while(_g < 4) {
-				var _ = _g++;
-				this.data[this.position++] = 0;
-			}
-		}
-		var exp = this.floor(this.log(this.abs(x)) / this.LN2);
-		var sig = this.floor(this.abs(x) / this.pow(2,exp) * this.pow(2,23)) & 8388607;
-		var b1 = exp + 127 >> 1 | (exp > 0?x < 0?128:64:x < 0?128:0), b2 = exp + 127 << 7 & 255 | sig >> 16 & 127, b3 = sig >> 8 & 255, b4 = sig & 255;
-		if(this.bigEndian) {
-			this.data[this.position++] = b1;
-			this.data[this.position++] = b2;
-			this.data[this.position++] = b3;
-			this.data[this.position++] = b4;
-		} else {
-			this.data[this.position++] = b4;
-			this.data[this.position++] = b3;
-			this.data[this.position++] = b2;
-			this.data[this.position++] = b1;
-		}
+		if(this.position + 4 >= this.byteView.length) this.jeashResizeBuffer(this.position + 4);
+		this.data.setFloat32(this.position,x,!this.bigEndian);
+		this.position += 4;
+		if(this.position > this.length) this.length = this.position;
 	}
 	,readInt: function() {
-		var ch1, ch2, ch3, ch4;
-		if(this.bigEndian) {
-			ch4 = this.readByte();
-			ch3 = this.readByte();
-			ch2 = this.readByte();
-			ch1 = this.readByte();
-		} else {
-			ch1 = this.readByte();
-			ch2 = this.readByte();
-			ch3 = this.readByte();
-			ch4 = this.readByte();
-		}
-		return ch1 | ch2 << 8 | ch3 << 16 | ch4 << 24;
+		var $int = this.data.getInt32(this.position,!this.bigEndian);
+		this.position += 4;
+		return $int;
 	}
 	,writeInt: function(value) {
-		if(this.bigEndian) {
-			this.writeByte(value >>> 24);
-			this.writeByte(value >> 16 & 255);
-			this.writeByte(value >> 8 & 255);
-			this.writeByte(value & 255);
-		} else {
-			this.writeByte(value & 255);
-			this.writeByte(value >> 8 & 255);
-			this.writeByte(value >> 16 & 255);
-			this.writeByte(value >>> 24);
-		}
+		if(this.position + 4 >= this.byteView.length) this.jeashResizeBuffer(this.position + 4);
+		this.data.setInt32(this.position,value,!this.bigEndian);
+		this.position += 4;
+		if(this.position > this.length) this.length = this.position;
 	}
 	,readShort: function() {
-		var ch1 = this.readByte();
-		var ch2 = this.readByte();
-		var n = this.bigEndian?ch2 | ch1 << 8:ch1 | ch2 << 8;
-		if((n & 32768) != 0) return n - 65536;
-		return n;
+		var $short = this.data.getInt16(this.position,!this.bigEndian);
+		this.position += 2;
+		return $short;
 	}
 	,writeShort: function(value) {
-		if(value < -32768 || value >= 32768) throw new jeash.errors.IOError("Write error - overflow");
-		this.writeUnsignedShort(value & 65535);
-	}
-	,writeUnsignedShort: function(value) {
-		if(value < 0 || value >= 65536) throw new jeash.errors.IOError("Write error - overflow");
-		if(this.__GetEndian() == jeash.utils.Endian.BIG_ENDIAN) {
-			this.writeByte(value >> 8);
-			this.writeByte(value & 255);
-		} else {
-			this.writeByte(value & 255);
-			this.writeByte(value >> 8);
-		}
-	}
-	,readUTF: function() {
-		var len = this.readShort();
-		var bytes = haxe.io.Bytes.ofData(this.data);
-		return bytes.readString(2,len);
-	}
-	,writeUTF: function(value) {
-		var bytes = haxe.io.Bytes.ofString(value);
-		this.writeShort(bytes.length);
-		var _g1 = 0, _g = bytes.length;
-		while(_g1 < _g) {
-			var i = _g1++;
-			this.data[this.position++] = bytes.b[i];
-		}
-	}
-	,writeUTFBytes: function(value) {
-		var bytes = haxe.io.Bytes.ofString(value);
-		var _g1 = 0, _g = bytes.length;
-		while(_g1 < _g) {
-			var i = _g1++;
-			this.data[this.position++] = bytes.b[i];
-		}
-	}
-	,readUTFBytes: function(len) {
-		var bytes = haxe.io.Bytes.ofData(this.data);
-		return bytes.readString(0,len);
-	}
-	,readUnsignedByte: function() {
-		return this.readByte();
+		if(this.position + 2 >= this.byteView.length) this.jeashResizeBuffer(this.position + 2);
+		this.data.setInt16(this.position,value,!this.bigEndian);
+		this.position += 2;
+		if(this.position > this.length) this.length = this.position;
 	}
 	,readUnsignedShort: function() {
-		return this.readShort();
+		var uShort = this.data.getUint16(this.position,!this.bigEndian);
+		this.position += 2;
+		return uShort;
+	}
+	,writeUnsignedShort: function(value) {
+		if(this.position + 2 >= this.byteView.length) this.jeashResizeBuffer(this.position + 2);
+		this.data.setUint16(this.position,value,!this.bigEndian);
+		this.position += 2;
+		if(this.position > this.length) this.length = this.position;
+	}
+	,readUTF: function() {
+		return this.readUTFBytes(this.length - this.position);
+	}
+	,writeUTF: function(value) {
+		this.writeUTFBytes(value);
+	}
+	,writeUTFBytes: function(value) {
+		if(this.position + value.length * 4 >= this.byteView.length) this.jeashResizeBuffer(this.position + value.length * 4);
+		var _g1 = 0, _g = value.length;
+		while(_g1 < _g) {
+			var i = _g1++;
+			var c = value.cca(i);
+			if(c <= 127) this.data.setUint8(this.position++,c); else if(c <= 2047) {
+				this.data.setUint8(this.position++,192 | c >> 6);
+				this.data.setUint8(this.position++,128 | c & 63);
+			} else if(c <= 65535) {
+				this.data.setUint8(this.position++,224 | c >> 12);
+				this.data.setUint8(this.position++,128 | c >> 6 & 63);
+				this.data.setUint8(this.position++,128 | c & 63);
+			} else {
+				this.data.setUint8(this.position++,240 | c >> 18);
+				this.data.setUint8(this.position++,128 | c >> 12 & 63);
+				this.data.setUint8(this.position++,128 | c >> 6 & 63);
+				this.data.setUint8(this.position++,128 | c & 63);
+			}
+		}
+		if(this.position > this.length) this.length = this.position;
+	}
+	,readUTFBytes: function(len) {
+		var value = "";
+		var fcc = String.fromCharCode;
+		var max = this.position + len;
+		if(max >= this.byteView.length) this.jeashResizeBuffer(max);
+		while(this.position < max) {
+			var c = this.data.getUint8(this.position++);
+			if(c < 128) {
+				if(c == 0) break;
+				value += fcc(c);
+			} else if(c < 224) value += fcc((c & 63) << 6 | this.data.getUint8(this.position++) & 127); else if(c < 240) {
+				var c2 = this.data.getUint8(this.position++);
+				value += fcc((c & 31) << 12 | (c2 & 127) << 6 | this.data.getUint8(this.position++) & 127);
+			} else {
+				var c2 = this.data.getUint8(this.position++);
+				var c3 = this.data.getUint8(this.position++);
+				value += fcc((c & 15) << 18 | (c2 & 127) << 12 | c3 << 6 & 127 | this.data.getUint8(this.position++) & 127);
+			}
+		}
+		return value;
+	}
+	,readUnsignedByte: function() {
+		return this.data.getUint8(this.position++);
 	}
 	,readUnsignedInt: function() {
-		return this.readInt();
+		var uInt = this.data.getUint32(this.position,!this.bigEndian);
+		this.position += 4;
+		return uInt;
 	}
 	,writeUnsignedInt: function(value) {
-		this.writeInt(value);
+		if(this.position + 4 >= this.byteView.length) this.jeashResizeBuffer(this.position + 4);
+		this.data.setUint32(this.position,value,!this.bigEndian);
+		this.position += 4;
+		if(this.position > this.length) this.length = this.position;
 	}
-	,__GetEndian: function() {
+	,jeashGetEndian: function() {
 		if(this.bigEndian == true) return jeash.utils.Endian.BIG_ENDIAN; else return jeash.utils.Endian.LITTLE_ENDIAN;
 	}
-	,__SetEndian: function(endian) {
+	,jeashSetEndian: function(endian) {
 		if(endian == jeash.utils.Endian.BIG_ENDIAN) this.bigEndian = true; else this.bigEndian = false;
 		return endian;
 	}
+	,jeashGetBuffer: function() {
+		return this.data.buffer;
+	}
 	,__class__: jeash.utils.ByteArray
-	,__properties__: {get_length:"GetLength",set_endian:"__SetEndian",get_endian:"__GetEndian",get_bytesAvailable:"GetBytesAvailable"}
+	,__properties__: {set_endian:"jeashSetEndian",get_endian:"jeashGetEndian",get_bytesAvailable:"jeashGetBytesAvailable"}
 }
 jeash.utils.Endian = $hxClasses["jeash.utils.Endian"] = { __ename__ : ["jeash","utils","Endian"], __constructs__ : ["BIG_ENDIAN","LITTLE_ENDIAN"] }
 jeash.utils.Endian.BIG_ENDIAN = ["BIG_ENDIAN",0];
@@ -11532,55 +11919,53 @@ com.lbineau.utils.ObjectHash.clsId = 0;
 haxe.Serializer.USE_CACHE = false;
 haxe.Serializer.USE_ENUM_INDEX = false;
 haxe.Serializer.BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789%:";
+haxe.Template.splitter = new EReg("(::[A-Za-z0-9_ ()&|!+=/><*.\"-]+::|\\$\\$([A-Za-z0-9_-]+)\\()","");
+haxe.Template.expr_splitter = new EReg("(\\(|\\)|[ \r\n\t]*\"[^\"]*\"[ \r\n\t]*|[!+=/><*.&|-]+)","");
+haxe.Template.expr_trim = new EReg("^[ ]*([^ ]+)[ ]*$","");
+haxe.Template.expr_int = new EReg("^[0-9]+$","");
+haxe.Template.expr_float = new EReg("^([+-]?)(?=\\d|,\\d)\\d*(,\\d*)?([Ee]([+-]?\\d+))?$","");
+haxe.Template.globals = { };
 haxe.Timer.arr = new Array();
 haxe.Unserializer.DEFAULT_RESOLVER = Type;
 haxe.Unserializer.BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789%:";
 haxe.Unserializer.CODES = null;
 haxe.xml.Check.blanks = new EReg("^[ \r\n\t]*$","");
-jeash.Lib.DEFAULT_PRIORITY = ["2d","swf"];
-jeash.Lib.mShowCursor = true;
-jeash.Lib.mShowFPS = false;
-jeash.Lib.mFullscreen = false;
-jeash.Lib.mCollectEveryFrame = false;
-jeash.Lib.mQuitOnEscape = true;
 jeash.Lib.mLastMouse = new jeash.geom.Point();
 jeash.Lib.VENDOR_HTML_TAG = "data-";
-jeash.Lib.HTML_DIV_EVENT_TYPES = ["resize","mouseup","mouseover","mouseout","mousemove","mousedown","mousewheel","focus","dblclick","click","blur"];
-jeash.Lib.HTML_WINDOW_EVENT_TYPES = ["keyup","keypress","keydown"];
+jeash.Lib.HTML_DIV_EVENT_TYPES = ["resize","mouseup","mouseover","mouseout","mousemove","mousedown","mousewheel","dblclick","click"];
+jeash.Lib.HTML_WINDOW_EVENT_TYPES = ["keyup","keypress","keydown","resize"];
+jeash.Lib.HTML_TOUCH_EVENT_TYPES = ["touchstart","touchmove","touchend"];
 jeash.Lib.JEASH_IDENTIFIER = "haxe:jeash";
 jeash.Lib.DEFAULT_WIDTH = 500;
 jeash.Lib.DEFAULT_HEIGHT = 500;
+jeash.display.BitmapData.mNameID = 0;
 jeash.display.BitmapDataChannel.ALPHA = 8;
 jeash.display.BitmapDataChannel.BLUE = 4;
 jeash.display.BitmapDataChannel.GREEN = 2;
 jeash.display.BitmapDataChannel.RED = 1;
-jeash.display.Graphics.defaultFontName = "ARIAL.TTF";
-jeash.display.Graphics.defaultFontSize = 12;
-jeash.display.Graphics.immediateMatrix = null;
-jeash.display.Graphics.immediateMask = null;
-jeash.display.Graphics.TOP = 0;
-jeash.display.Graphics.CENTER = 1;
-jeash.display.Graphics.BOTTOM = 2;
-jeash.display.Graphics.LEFT = 0;
-jeash.display.Graphics.RIGHT = 2;
+jeash.display.BlendMode.ADD = "ADD";
+jeash.display.BlendMode.ALPHA = "ALPHA";
+jeash.display.BlendMode.DARKEN = "DARKEN";
+jeash.display.BlendMode.DIFFERENCE = "DIFFERENCE";
+jeash.display.BlendMode.ERASE = "ERASE";
+jeash.display.BlendMode.HARDLIGHT = "HARDLIGHT";
+jeash.display.BlendMode.INVERT = "INVERT";
+jeash.display.BlendMode.LAYER = "LAYER";
+jeash.display.BlendMode.LIGHTEN = "LIGHTEN";
+jeash.display.BlendMode.MULTIPLY = "MULTIPLY";
+jeash.display.BlendMode.NORMAL = "NORMAL";
+jeash.display.BlendMode.OVERLAY = "OVERLAY";
+jeash.display.BlendMode.SCREEN = "SCREEN";
+jeash.display.BlendMode.SUBTRACT = "SUBTRACT";
 jeash.display.Graphics.RADIAL = 1;
 jeash.display.Graphics.SPREAD_REPEAT = 2;
 jeash.display.Graphics.SPREAD_REFLECT = 4;
-jeash.display.Graphics.EDGE_MASK = 240;
-jeash.display.Graphics.EDGE_CLAMP = 0;
-jeash.display.Graphics.EDGE_REPEAT = 16;
-jeash.display.Graphics.EDGE_UNCHECKED = 32;
-jeash.display.Graphics.EDGE_REPEAT_POW2 = 48;
 jeash.display.Graphics.END_NONE = 0;
 jeash.display.Graphics.END_ROUND = 256;
 jeash.display.Graphics.END_SQUARE = 512;
-jeash.display.Graphics.END_MASK = 768;
-jeash.display.Graphics.END_SHIFT = 8;
 jeash.display.Graphics.CORNER_ROUND = 0;
 jeash.display.Graphics.CORNER_MITER = 4096;
 jeash.display.Graphics.CORNER_BEVEL = 8192;
-jeash.display.Graphics.CORNER_MASK = 12288;
-jeash.display.Graphics.CORNER_SHIFT = 12;
 jeash.display.Graphics.PIXEL_HINTING = 16384;
 jeash.display.Graphics.BMP_REPEAT = 16;
 jeash.display.Graphics.BMP_SMOOTH = 65536;
@@ -11591,27 +11976,10 @@ jeash.display.Graphics.SCALE_NORMAL = 3;
 jeash.display.Graphics.MOVE = 0;
 jeash.display.Graphics.LINE = 1;
 jeash.display.Graphics.CURVE = 2;
-jeash.display.Graphics.BLEND_ADD = 0;
-jeash.display.Graphics.BLEND_ALPHA = 1;
-jeash.display.Graphics.BLEND_DARKEN = 2;
-jeash.display.Graphics.BLEND_DIFFERENCE = 3;
-jeash.display.Graphics.BLEND_ERASE = 4;
-jeash.display.Graphics.BLEND_HARDLIGHT = 5;
-jeash.display.Graphics.BLEND_INVERT = 6;
-jeash.display.Graphics.BLEND_LAYER = 7;
-jeash.display.Graphics.BLEND_LIGHTEN = 8;
-jeash.display.Graphics.BLEND_MULTIPLY = 9;
-jeash.display.Graphics.BLEND_NORMAL = 10;
-jeash.display.Graphics.BLEND_OVERLAY = 11;
-jeash.display.Graphics.BLEND_SCREEN = 12;
-jeash.display.Graphics.BLEND_SUBTRACT = 13;
-jeash.display.Graphics.BLEND_SHADER = 14;
 jeash.display.Graphics.TILE_SCALE = 1;
 jeash.display.Graphics.TILE_ROTATION = 2;
 jeash.display.Graphics.TILE_RGB = 4;
 jeash.display.Graphics.TILE_ALPHA = 8;
-jeash.display.Graphics.TILE_SMOOTH = 4096;
-jeash.display.Graphics.JEASH_SIZING_WARM_UP = 10;
 jeash.display.Graphics.JEASH_MAX_DIMENSION = 5000;
 jeash.display.GraphicsPathCommand.LINE_TO = 2;
 jeash.display.GraphicsPathCommand.MOVE_TO = 1;
@@ -11629,9 +11997,18 @@ jeash.events.MouseEvent.MOUSE_UP = "mouseUp";
 jeash.events.MouseEvent.MOUSE_WHEEL = "mouseWheel";
 jeash.events.MouseEvent.ROLL_OUT = "rollOut";
 jeash.events.MouseEvent.ROLL_OVER = "rollOver";
+jeash.events.TouchEvent.TOUCH_BEGIN = "touchBegin";
+jeash.events.TouchEvent.TOUCH_END = "touchEnd";
+jeash.events.TouchEvent.TOUCH_MOVE = "touchMove";
+jeash.events.TouchEvent.TOUCH_OUT = "touchOut";
+jeash.events.TouchEvent.TOUCH_OVER = "touchOver";
+jeash.events.TouchEvent.TOUCH_ROLL_OUT = "touchRollOut";
+jeash.events.TouchEvent.TOUCH_ROLL_OVER = "touchRollOver";
+jeash.events.TouchEvent.TOUCH_TAP = "touchTap";
 jeash.display.Stage.jeashMouseChanges = [jeash.events.MouseEvent.MOUSE_OUT,jeash.events.MouseEvent.MOUSE_OVER,jeash.events.MouseEvent.ROLL_OUT,jeash.events.MouseEvent.ROLL_OVER];
+jeash.display.Stage.jeashTouchChanges = [jeash.events.TouchEvent.TOUCH_OUT,jeash.events.TouchEvent.TOUCH_OVER,jeash.events.TouchEvent.TOUCH_ROLL_OUT,jeash.events.TouchEvent.TOUCH_ROLL_OVER];
 jeash.display.Stage.DEFAULT_FRAMERATE = 60.0;
-jeash.display.Stage.DEFAULT_PROJ_MATRIX = [1.,0,0,0,0,1,0,0,0,0,-1,-1,0,0,0,0];
+jeash.display.Stage.UI_EVENTS_QUEUE_MAX = 1000;
 jeash.display.StageQuality.BEST = "best";
 jeash.display.StageQuality.HIGH = "high";
 jeash.display.StageQuality.MEDIUM = "medium";
@@ -11645,9 +12022,15 @@ jeash.events.FocusEvent.FOCUS_IN = "FOCUS_IN";
 jeash.events.FocusEvent.FOCUS_OUT = "FOCUS_OUT";
 jeash.events.FocusEvent.KEY_FOCUS_CHANGE = "KEY_FOCUS_CHANGE";
 jeash.events.FocusEvent.MOUSE_FOCUS_CHANGE = "MOUSE_FOCUS_CHANGE";
+jeash.events.HTTPStatusEvent.HTTP_RESPONSE_STATUS = "httpResponseStatus";
+jeash.events.HTTPStatusEvent.HTTP_STATUS = "httpStatus";
 jeash.events.IOErrorEvent.IO_ERROR = "IO_ERROR";
 jeash.events.KeyboardEvent.KEY_DOWN = "KEY_DOWN";
 jeash.events.KeyboardEvent.KEY_UP = "KEY_UP";
+jeash.events.ProgressEvent.PROGRESS = "progress";
+jeash.events.ProgressEvent.SOCKET_DATA = "socketData";
+jeash.events.TimerEvent.TIMER = "timer";
+jeash.events.TimerEvent.TIMER_COMPLETE = "timerComplete";
 jeash.media.Sound.MEDIA_TYPE_MP3 = "audio/mpeg";
 jeash.media.Sound.MEDIA_TYPE_OGG = "audio/ogg; codecs=\"vorbis\"";
 jeash.media.Sound.MEDIA_TYPE_WAV = "audio/wav; codecs=\"1\"";
@@ -11885,7 +12268,7 @@ jeash.ui.Keyboard.DOM_VK_SELECT = 41;
 jeash.ui.Keyboard.DOM_VK_PRINT = 42;
 jeash.ui.Keyboard.DOM_VK_EXECUTE = 43;
 jeash.ui.Keyboard.DOM_VK_SLEEP = 95;
+jeash.utils.ByteArray.BYTE_ARRAY_BUFFER_SIZE = 8192;
 js.Lib.onerror = null;
 nme.installer.Assets.cachedBitmapData = new Hash();
 ApplicationMain.main()
-//@ sourceMappingURL=HaxeNavigator.js.map
